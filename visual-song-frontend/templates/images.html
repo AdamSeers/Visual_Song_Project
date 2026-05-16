@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Images — Visual Song</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@300;400;500&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+
+<body>
+    <nav class="topnav">
+        <a class="brand" href="/">
+            <svg class="brand-logo" viewBox="0 0 32 32" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+                <rect x="1" y="1" width="30" height="30" rx="3" fill="none" stroke="currentColor" stroke-width="1"
+                    opacity="0.35" />
+                <circle cx="6" cy="16" r="3" fill="#ff7800" />
+                <rect x="11" y="13" width="6" height="6" rx="1.5" fill="#00d8ff" />
+                <circle cx="20" cy="16" r="3" fill="#7800e8" />
+                <rect x="23" y="13" width="6" height="6" rx="0.5" fill="#ff0000" />
+            </svg>
+            <span class="brand-name">Visual Song</span>
+        </a>
+        <ul class="nav-links">
+            <li><a href="/" class="nav-link">home</a></li>
+            <li><a href="/live" class="nav-link">live</a></li>
+            <li><a href="/images" class="nav-link active">images</a></li>
+            <li><a href="/about" class="nav-link">about</a></li>
+        </ul>
+    </nav>
+
+    <div class="spectrum-bar" aria-hidden="true"></div>
+
+    <main class="shell">
+        <header class="masthead">
+            <h1><span class="word w1">images</span></h1>
+            <p class="lede">
+                Upload a song. The tempo is detected, and the video cuts between
+                images chosen to match the colors of each beat. Loud notes
+                contribute more strongly to the color match than quiet ones.
+            </p>
+            <p class="warning" role="note">
+                <strong>Photosensitivity warning:</strong> rapid image cuts. If you
+                have photosensitive epilepsy, avoid or proceed with caution.
+            </p>
+        </header>
+
+        <section class="panel">
+            <h2 class="panel-title"><span class="num">01</span> drop in a file</h2>
+
+            <form id="upload-form" class="form">
+                <label class="dropzone" id="dropzone">
+                    <input type="file" name="audio" id="audio-input" accept="audio/*" required hidden />
+                    <div class="dropzone-inner">
+                        <div class="dz-icon" aria-hidden="true">&#9834;</div>
+                        <div class="dz-text">
+                            <span class="dz-primary" id="dz-primary">Choose an audio file</span>
+                            <span class="dz-secondary">mp3 &middot; wav &middot; flac &middot; ogg &middot; m4a &middot;
+                                aac &middot; opus</span>
+                        </div>
+                    </div>
+                </label>
+
+                <button type="submit" id="submit-btn" class="btn">
+                    <span>render images video</span>
+                    <span class="btn-arrow" aria-hidden="true">&rarr;</span>
+                </button>
+
+                <details class="controls">
+                    <summary class="controls-summary">
+                        <span>advanced settings</span>
+                        <span class="controls-chevron" aria-hidden="true">&#9656;</span>
+                    </summary>
+                    <p class="controls-hint">Defaults work well. Adjust if you want a different feel.</p>
+
+                    <div class="control">
+                        <label for="images_per_beat">
+                            <span class="control-name">Images per beat</span>
+                            <span class="control-desc">Higher = more frequent cuts. Use values below 1 for slower (e.g.
+                                0.5 = one image every 2 beats).</span>
+                        </label>
+                        <div class="control-row">
+                            <input type="range" id="images_per_beat" name="images_per_beat" min="0.25" max="8"
+                                step="0.25" value="4" />
+                            <output for="images_per_beat">4.00</output>
+                        </div>
+                    </div>
+
+                    <div class="control">
+                        <label for="audio_offset">
+                            <span class="control-name">Audio delay</span>
+                            <span class="control-desc">Delay the audio (seconds) to match the visual.</span>
+                        </label>
+                        <div class="control-row">
+                            <input type="range" id="audio_offset" name="audio_offset" min="0" max="1.0" step="0.05"
+                                value="0.00" />
+                            <output for="audio_offset">0.00</output>
+                        </div>
+                    </div>
+                </details>
+            </form>
+        </section>
+
+        <section class="panel status-panel" id="status-panel" hidden>
+            <h2 class="panel-title"><span class="num">02</span> <span id="status-title">working&hellip;</span></h2>
+            <div class="progress-track" aria-hidden="true">
+                <div class="progress-fill" id="progress-fill"></div>
+            </div>
+            <div class="progress-meta">
+                <span id="progress-pct">0%</span>
+                <span id="progress-detail">analysing audio</span>
+            </div>
+        </section>
+
+        <section class="panel result-panel" id="result-panel" hidden>
+            <h2 class="panel-title"><span class="num">03</span> here it is</h2>
+            <video id="result-video" controls playsinline></video>
+            <a id="download-link" class="btn btn-secondary" download>
+                <span>download MP4</span>
+                <span class="btn-arrow" aria-hidden="true">&darr;</span>
+            </a>
+        </section>
+
+        <footer class="footer">
+            <span>beat detection &rarr; palette &rarr; image match</span>
+            <span class="dot">&middot;</span>
+            <span>480p &middot; 30fps &middot; AAC</span>
+        </footer>
+    </main>
+
+    <script>
+        const form = document.getElementById('upload-form');
+        const fileInput = document.getElementById('audio-input');
+        const dropzone = document.getElementById('dropzone');
+        const dzPrimary = document.getElementById('dz-primary');
+        const submitBtn = document.getElementById('submit-btn');
+        const statusPanel = document.getElementById('status-panel');
+        const statusTitle = document.getElementById('status-title');
+        const progressFill = document.getElementById('progress-fill');
+        const progressPct = document.getElementById('progress-pct');
+        const progressDetail = document.getElementById('progress-detail');
+        const resultPanel = document.getElementById('result-panel');
+        const resultVideo = document.getElementById('result-video');
+        const downloadLink = document.getElementById('download-link');
+
+        // Slider readouts
+        document.querySelectorAll('.control input[type="range"]').forEach(range => {
+            const output = document.querySelector('output[for="' + range.id + '"]');
+            if (!output) return;
+            const fmt = () => {
+                const v = parseFloat(range.value);
+                output.textContent = range.step.indexOf('.') >= 0 ? v.toFixed(2) : String(v);
+            };
+            range.addEventListener('input', fmt);
+            fmt();
+        });
+
+        fileInput.addEventListener('change', () => {
+            const f = fileInput.files[0];
+            if (f) { dzPrimary.textContent = f.name; dropzone.classList.add('has-file'); }
+        });
+        ['dragenter', 'dragover'].forEach(ev => dropzone.addEventListener(ev, e => {
+            e.preventDefault(); e.stopPropagation(); dropzone.classList.add('drag');
+        }));
+        ['dragleave', 'drop'].forEach(ev => dropzone.addEventListener(ev, e => {
+            e.preventDefault(); e.stopPropagation(); dropzone.classList.remove('drag');
+        }));
+        dropzone.addEventListener('drop', e => {
+            const f = e.dataTransfer.files[0];
+            if (f) {
+                const dt = new DataTransfer(); dt.items.add(f); fileInput.files = dt.files;
+                dzPrimary.textContent = f.name; dropzone.classList.add('has-file');
+            }
+        });
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (!fileInput.files[0]) return;
+            submitBtn.disabled = true;
+            resultPanel.hidden = true;
+            statusPanel.hidden = false;
+            statusTitle.textContent = 'uploading';
+            progressFill.style.width = '0%';
+            progressPct.textContent = '0%';
+            progressDetail.textContent = 'sending file to server';
+
+            const fd = new FormData(form);
+            let jobId;
+            try {
+                const resp = await fetch('/jobs/images', { method: 'POST', body: fd });
+                if (!resp.ok) {
+                    const j = await resp.json().catch(() => ({}));
+                    throw new Error(j.error || ('HTTP ' + resp.status));
+                }
+                ({ job_id: jobId } = await resp.json());
+            } catch (err) {
+                fail('upload failed: ' + err.message); return;
+            }
+            statusTitle.textContent = 'rendering';
+            progressDetail.textContent = 'detecting beats & matching images';
+            poll(jobId);
+        });
+
+        function poll(jobId) {
+            const interval = setInterval(async () => {
+                try {
+                    const r = await fetch('/jobs/' + jobId);
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    const s = await r.json();
+                    const pct = Math.round((s.progress || 0) * 100);
+                    progressFill.style.width = pct + '%';
+                    progressPct.textContent = pct + '%';
+                    if (s.status === 'done') { clearInterval(interval); finish(jobId); }
+                    else if (s.status === 'error') { clearInterval(interval); fail('error: ' + (s.error || 'unknown')); }
+                } catch (err) { clearInterval(interval); fail('poll failed: ' + err.message); }
+            }, 1000);
+        }
+        function finish(jobId) {
+            const url = '/jobs/' + jobId + '/video';
+            resultVideo.src = url;
+            downloadLink.href = url;
+            statusTitle.textContent = 'done';
+            progressDetail.textContent = 'complete';
+            resultPanel.hidden = false;
+            submitBtn.disabled = false;
+            resultPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+        function fail(message) {
+            statusTitle.textContent = message;
+            progressDetail.textContent = '\u00a0';
+            submitBtn.disabled = false;
+        }
+
+        // Apply saved theme
+        (function () {
+            const saved = localStorage.getItem('visualsong-theme');
+            if (!saved) return;
+            function hexToRgb(h) { h = h.replace('#', ''); return { r: parseInt(h.slice(0, 2), 16), g: parseInt(h.slice(2, 4), 16), b: parseInt(h.slice(4, 6), 16) }; }
+            function rgbToHex(r, g, b) { const c = v => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0'); return '#' + c(r) + c(g) + c(b); }
+            function mix(hex, target, p) { const a = hexToRgb(hex), b = hexToRgb(target); return rgbToHex(a.r + (b.r - a.r) * p, a.g + (b.g - a.g) * p, a.b + (b.b - a.b) * p); }
+            const root = document.documentElement.style;
+            root.setProperty('--bg', mix(saved, '#000000', 0.94));
+            root.setProperty('--bg-2', mix(saved, '#000000', 0.88));
+            root.setProperty('--bg-3', mix(saved, '#000000', 0.80));
+            root.setProperty('--rule', mix(saved, '#000000', 0.72));
+            root.setProperty('--ink', mix(saved, '#ffffff', 0.85));
+            root.setProperty('--ink-dim', mix(saved, '#888888', 0.55));
+            root.setProperty('--ink-faint', mix(saved, '#555555', 0.55));
+            root.setProperty('--accent', saved);
+            root.setProperty('--accent-2', mix(saved, '#ffffff', 0.45));
+        })();
+    </script>
+</body>
+
+</html>
