@@ -611,3 +611,67 @@ h1 .w2 {
   letter-spacing: 0.15em;
   color: var(--ink-dim);
 }
+
+.switch-label {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 0.75rem;
+  align-items: start;
+  cursor: pointer;
+}
+
+/* Hide the native checkbox but keep it accessible */
+.switch-label input[type="checkbox"] {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.switch-track {
+  grid-row: 1 / span 2;
+  position: relative;
+  width: 40px;
+  height: 22px;
+  margin-top: 0.15rem;
+  background: var(--bg-3);
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  transition: background 160ms ease, border-color 160ms ease;
+  flex-shrink: 0;
+}
+
+.switch-track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  background: var(--ink-dim);
+  border-radius: 50%;
+  transition: transform 160ms ease, background 160ms ease;
+}
+
+.switch-label input[type="checkbox"]:checked~.switch-track {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.switch-label input[type="checkbox"]:checked~.switch-track::after {
+  transform: translateX(18px);
+  background: #fff;
+}
+
+.switch-label input[type="checkbox"]:focus-visible~.switch-track {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.switch-label .control-name {
+  grid-column: 2;
+}
+
+.switch-label .control-desc {
+  grid-column: 2;
+}

@@ -193,8 +193,10 @@ def submit_image_job():
     display_name = os.path.splitext(safe)[0] + "_images.mp4"
 
     settings = {
-        "images_per_beat": _get_float("images_per_beat", 4.0, 0.1, 16.0),
+        "images_per_beat": _get_float("images_per_beat", 2.0, 0.1, 16.0),
+        "accuracy": _get_float("accuracy", 0.9, 0.1, 1.0),
         "audio_offset": _get_float("audio_offset", 0.0, 0.0, 1.0),
+        "debug_no_images": request.form.get("debug_no_images") == "on",
     }
 
     with _jobs_lock:
@@ -235,34 +237,6 @@ def job_video(job_id: str):
         download_name=job.get("display_name", "visualization.mp4"),
     )
 
-COLOR_API_DIR = os.path.join(os.path.dirname(__file__), "color-api")
-
-
-def _start_color_api():
-    """Launch the .NET color-match service in the background.
-
-    Silently does nothing if the project folder doesn't exist yet, so this
-    is safe to run before the .NET side is set up.
-    """
-    if not os.path.isdir(COLOR_API_DIR):
-        print("[color-api] folder not found, skipping launch")
-        return None
-    if not shutil.which("dotnet"):
-        print("[color-api] dotnet CLI not on PATH, skipping launch")
-        return None
-    print("[color-api] starting on http://localhost:5050")
-    proc = subprocess.Popen(
-        # retirer --no-build eventuellement
-        ["dotnet", "run", "--no-build", "--project", COLOR_API_DIR,
-         "--urls", "http://localhost:5050"],
-        cwd=COLOR_API_DIR,
-    )
-    # Make sure it dies when this Flask process dies
-    atexit.register(lambda: proc.terminate())
-    return proc
-
-
 if __name__ == "__main__":
-    _start_color_api()
     # Threaded so status polls don't queue behind the worker thread.
     app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)

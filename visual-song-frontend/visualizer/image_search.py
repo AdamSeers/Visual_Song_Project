@@ -12,14 +12,20 @@ import os
 import tempfile
 import urllib.parse
 import urllib.request
+import ssl
+import urllib.error
+import urllib.request
 from typing import List, Optional, Tuple
 
 # (rgb_tuple, weight_in_0_to_1)
 ColorWeight = Tuple[Tuple[int, int, int], float]
 
 # The .NET service URL. Override via env var if it runs somewhere else.
-API_BASE = os.environ.get("COLOR_API_BASE", "http://localhost:5050")
-API_TIMEOUT_SECONDS = 2.0
+API_BASE = os.environ.get("COLOR_API_BASE", "https://localhost:7170")
+API_TIMEOUT_SECONDS = 15.0
+_SSL_CTX = ssl.create_default_context()
+_SSL_CTX.check_hostname = False
+_SSL_CTX.verify_mode = ssl.CERT_NONE
 
 # Where downloaded images get cached. Survives between requests but is
 # disposable — wipe it any time.
@@ -45,6 +51,7 @@ def _rgb_to_hex(rgb: Tuple[int, int, int]) -> str:
 
 
 def _query_api(palette: List[ColorWeight], accuracy: float = 0.7) -> Optional[str]:
+    # print(f"[image_search] timeout={API_TIMEOUT_SECONDS}")
     """Hit the .NET color-match API. Returns an image path or None."""
     body = {
         "accuracy": accuracy,
@@ -63,14 +70,21 @@ def _query_api(palette: List[ColorWeight], accuracy: float = 0.7) -> Optional[st
                 "Accept": "application/json",
             },
         )
-        with urllib.request.urlopen(req, timeout=API_TIMEOUT_SECONDS) as resp:
+        with urllib.request.urlopen(req, timeout=API_TIMEOUT_SECONDS, context=_SSL_CTX) as resp:
             data = json.loads(resp.read())
         if "image_path" in data and data["image_path"]:
             return data["image_path"]
         if "image_url" in data and data["image_url"]:
             return _download_to_cache(data["image_url"])
-    except Exception:
-        return None
+        print(f"[image_search] API responded but no image_path/image_url in: {data}")
+    except urllib.error.HTTPError as e:
+        print(f"[image_search] HTTP {e.code} from color API: {e.reason}")
+    except urllib.error.URLError as e:
+        print(f"[image_search] cannot reach color API at {url}: {e.reason}")
+    except json.JSONDecodeError as e:
+        print(f"[image_search] color API returned non-JSON: {e}")
+    except Exception as e:
+        print(f"[image_search] unexpected error querying color API: {e!r}")
     return None
 
 """ EXAMPLE
@@ -110,7 +124,7 @@ def _download_to_cache(url: str) -> Optional[str]:
         return path
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "visual-song"})
-        with urllib.request.urlopen(req, timeout=API_TIMEOUT_SECONDS * 2) as resp:
+        with urllib.request.urlopen(req, timeout=API_TIMEOUT_SECONDS * 2, context=_SSL_CTX) as resp:
             with open(path, "wb") as fh:
                 fh.write(resp.read())
         return path
@@ -118,11 +132,29 @@ def _download_to_cache(url: str) -> Optional[str]:
         return None
 
 
-def get_image(palette: List[ColorWeight]) -> Optional[str]:
+def get_image(
+    palette: List[ColorWeight],
+    accuracy: float = 0.7,
+    debug_no_images: bool = False,
+) -> Optional[str]:
     """Find an image matching the given color palette.
 
     Returns a local filesystem path, or None to fall back to color bars.
+    If debug_no_images is True, skips the API entirely and returns None
+    so the renderer draws color bars (useful for seeing the raw palette).
     """
+    if debug_no_images:
+        return None
     if not palette:
         return None
-    return _query_api(palette)
+    return _query_api(palette, accuracy=accuracy)
+
+def ping() -> str:
+    """Quick connectivity check. Run from a Python shell:
+        from visualizer.image_search import ping; print(ping())
+    """
+    test_palette = [((255, 0, 0), 0.6), ((0, 0, 255), 0.4)]
+    result = _query_api(test_palette, accuracy=0.5)
+    if result:
+        return f"OK — API returned: {result}"
+    return "FAILED — see [image_search] messages above for the reason"

@@ -38,7 +38,7 @@
 
     <main class="shell">
         <header class="masthead">
-            <h1><span class="word w1">images</span></h1>
+            <h1><span class="word w1">Images</span></h1>
             <p class="lede">
                 Upload a song. The tempo is detected, and the video cuts between
                 images chosen to match the colors of each beat. Loud notes
@@ -86,8 +86,21 @@
                         </label>
                         <div class="control-row">
                             <input type="range" id="images_per_beat" name="images_per_beat" min="0.25" max="8"
-                                step="0.25" value="4" />
-                            <output for="images_per_beat">4.00</output>
+                                step="0.25" value="2" />
+                            <output for="images_per_beat">2.00</output>
+                        </div>
+                    </div>
+
+                    <div class="control">
+                        <label for="accuracy">
+                            <span class="control-name">Image color accuracy</span>
+                            <span class="control-desc">How closely an image must match the song's colors. Higher =
+                                stricter color match, fewer but better-fitting images.</span>
+                        </label>
+                        <div class="control-row">
+                            <input type="range" id="accuracy" name="accuracy" min="0.1" max="1.0" step="0.05"
+                                value="0.9" />
+                            <output for="accuracy">0.90</output>
                         </div>
                     </div>
 
@@ -101,6 +114,15 @@
                                 value="0.00" />
                             <output for="audio_offset">0.00</output>
                         </div>
+                    </div>
+                    <div class="control">
+                        <label class="switch-label">
+                            <input type="checkbox" id="debug_no_images" name="debug_no_images" />
+                            <span class="switch-track" aria-hidden="true"></span>
+                            <span class="control-name">Debug: skip image search</span>
+                            <span class="control-desc">When on, no images are fetched &mdash; the video shows the raw
+                                color bars instead.</span>
+                        </label>
                     </div>
                 </details>
             </form>

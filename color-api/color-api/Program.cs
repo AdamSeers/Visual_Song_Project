@@ -3,6 +3,7 @@ using ColorApi.ImageBank.Endpoints;
 using ColorApi.ImageBank.Import;
 using Microsoft.EntityFrameworkCore;
 using ColorApi.ImageBank.Colors;
+using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -23,6 +24,8 @@ builder.Services.AddHttpClient(nameof(ColorExtractionService), c =>
     c.DefaultRequestHeaders.UserAgent.ParseAdd("ColorApi/1.0"));
 builder.Services.AddHostedService<ColorExtractionService>();
 
+builder.Services.AddScoped<ColorSearchService>();
+
 var app = builder.Build();
 
 // `dotnet run -- import --source nga-data` loads the NGA data, then exits.
@@ -36,8 +39,26 @@ if (args.Length > 0 && args[0].Equals("import", StringComparison.OrdinalIgnoreCa
 }
 
 using (var scope = app.Services.CreateScope())
-    await scope.ServiceProvider.GetRequiredService<AppDbContext>()
-        .Database.EnsureCreatedAsync();
+{
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    await db.Database.EnsureCreatedAsync();
+
+    var search = new ColorSearchService(db);
+    try
+    {
+        await search.SearchAsync(
+            new ColorSearchRequest
+            {
+                Accuracy = 0.7,
+                Colors = { new ColorQueryItem { R = 128, G = 128, B = 128, Weight = 1.0 } }
+            },
+            CancellationToken.None);
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"[warmup] non-fatal: {ex.Message}");
+    }
+}
 
 app.MapApi(); // adds /api/images/*, /api/objects/*, /api/stats, /health
 
@@ -45,6 +66,7 @@ app.MapApi(); // adds /api/images/*, /api/objects/*, /api/stats, /health
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
+    app.MapScalarApiReference();
 }
 
 app.UseHttpsRedirection();

@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using ColorApi.ImageBank.Colors;
 using ColorApi.ImageBank.Data;
 using ColorApi.ImageBank.Models;
 
@@ -60,17 +61,26 @@ public static class ApiEndpoints
                 : Results.Redirect(img.ImageUrl(size));
         });
 
-        // The colour-search endpoint. Intentionally not implemented yet -
-        // this is the "later" step: accept colours + target percentages and
-        // return images whose palette is close.
-        app.MapGet("/api/images/by-color", (string hex) =>
-            Results.Json(new
-            {
-                error = "not_implemented",
-                message = "Colour search is the next step. The colors table " +
-                          "is now being populated by the background extractor.",
-                requested = hex,
-            }, statusCode: StatusCodes.Status501NotImplemented));
+        // The colour search. Body = accuracy + list of {r,g,b,weight}.
+        // Returns the single best-corresponding image and its score
+        // (lower score = better match).
+        app.MapPost("/api/colors", async (
+            ColorSearchRequest body,
+            ColorSearchService search,
+            CancellationToken ct) =>
+        {
+            if (body.Colors is null || body.Colors.Count == 0)
+                return Results.BadRequest(new { error = "Provide at least one colour." });
+
+            var result = await search.SearchAsync(body, ct);
+            return result is null
+                ? Results.NotFound(new { error = "No matching image found." })
+                : Results.Ok(new
+                {
+                    image_url = result.ImageUrl,
+                    score = result.Score,
+                });
+        });
     }
 
     private static object ToDto(PublishedImage i) => new
