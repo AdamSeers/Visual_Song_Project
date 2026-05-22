@@ -41,8 +41,8 @@ body {
   height: 3px;
   width: 100%;
   background: linear-gradient(270deg,
-      #7a008a 0%, #1100ff 14%, #00f7ff 28%,
-      #00ff11 42%, #eeff00 56%,
+      #850085 0%, #0000ff 14%, #00ffff 28%,
+      #00ff00 42%, #ffff00 56%,
       #ff0000 84%, #850000 100%);
   opacity: 0.85;
   position: sticky;

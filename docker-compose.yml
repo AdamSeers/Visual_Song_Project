@@ -1,0 +1,31 @@
+services:
+  color-api:
+    build:
+      context: ./color-api
+      dockerfile: Dockerfile
+    container_name: color-api
+    ports:
+      - "5050:5050"
+    volumes:
+      - ./color-api/nga.db:/app/nga.db
+    restart: unless-stopped
+
+  visual-song:
+    build:
+      context: ./visual-song-frontend
+      dockerfile: Dockerfile
+    container_name: visual-song
+    ports:
+      - "5000:5000"
+    environment:
+      # Inside the Docker network, services reach each other by service name.
+      # 'color-api' resolves to the other container's internal IP.
+      - COLOR_API_BASE=http://color-api:5050
+    volumes:
+      # Mount uploads/outputs to the host so videos persist after container
+      # restarts and you can grab them from disk.
+      - ./visual-song-frontend/uploads:/app/uploads
+      - ./visual-song-frontend/outputs:/app/outputs
+    depends_on:
+      - color-api
+    restart: unless-stopped
