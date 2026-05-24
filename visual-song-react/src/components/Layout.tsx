@@ -40,6 +40,11 @@ export default function Layout() {
                         </NavLink>
                     </li>
                     <li>
+                        <NavLink to="/notes" className={({ isActive }) => 'nav-link' + (isActive ? ' active' : '')}>
+                            Notes
+                        </NavLink>
+                    </li>
+                    <li>
                         <NavLink to="/about" className={({ isActive }) => 'nav-link' + (isActive ? ' active' : '')}>
                             About
                         </NavLink>

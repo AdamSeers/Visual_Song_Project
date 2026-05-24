@@ -5,6 +5,7 @@ import Layout from './components/Layout'
 import Home from './pages/Home'
 import Live from './pages/Live'
 import Images from './pages/Images'
+import Notes from './pages/Notes'
 import About from './pages/About'
 import './styles.css'
 
@@ -16,6 +17,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           <Route path="/" element={<Home />} />
           <Route path="/live" element={<Live />} />
           <Route path="/images" element={<Images />} />
+          <Route path="/notes" element={<Notes />} />
           <Route path="/about" element={<About />} />
         </Route>
       </Routes>

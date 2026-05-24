@@ -691,3 +691,111 @@ a {
   color: var(--accent);
   border-bottom-color: var(--accent);
 }
+
+.notes-preview {
+  display: block;
+  max-width: 100%;
+  max-height: 300px;
+  margin: 1.25rem auto 0;
+  border-radius: 2px;
+  border: 1px solid var(--rule);
+}
+
+.piano {
+  display: flex;
+  position: relative;
+  height: 180px;
+  user-select: none;
+  background: var(--bg-3);
+  border-radius: 2px;
+  padding: 8px;
+}
+
+.piano-key {
+  position: relative;
+  cursor: pointer;
+  border: 1px solid var(--rule);
+  padding: 0;
+  font-family: inherit;
+  font-size: 0.7rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  transition: background 80ms ease, transform 80ms ease;
+}
+
+.piano-key.white {
+  flex: 1;
+  background: #f0f0f0;
+  color: #333;
+  border-radius: 0 0 4px 4px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 0.5rem;
+  z-index: 1;
+}
+
+.piano-key.white:hover {
+  background: #e0e8f5;
+}
+
+.piano-key.white.active {
+  background: var(--accent-2);
+  transform: translateY(2px);
+}
+
+.piano-key.black {
+  position: absolute;
+  width: 6%;
+  height: 60%;
+  background: #1a1a1a;
+  color: #aaa;
+  border-radius: 0 0 3px 3px;
+  z-index: 2;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 0.4rem;
+  /* positioned absolutely; computed offsets below for each black key */
+}
+
+/* Black keys are positioned by index. There are 5 black keys in our 13-key span:
+   C#, D#, F#, G#, A#. These offsets are tuned for an 8-white-key layout. */
+.piano-key.black:nth-of-type(2) {
+  left: 10.5%;
+}
+
+/* C# (after C) */
+.piano-key.black:nth-of-type(4) {
+  left: 23%;
+}
+
+/* D# (after D) */
+.piano-key.black:nth-of-type(7) {
+  left: 47.0%;
+}
+
+/* F# (after F) */
+.piano-key.black:nth-of-type(9) {
+  left: 59%;
+}
+
+/* G# (after G) */
+.piano-key.black:nth-of-type(11) {
+  left: 71.5%;
+}
+
+/* A# (after A) */
+
+.piano-key.black:hover {
+  background: #2a2a2a;
+}
+
+.piano-key.black.active {
+  background: var(--accent);
+  transform: translateY(2px);
+}
+
+.piano-key-label {
+  font-weight: 500;
+}

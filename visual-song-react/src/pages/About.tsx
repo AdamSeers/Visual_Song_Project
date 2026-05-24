@@ -29,6 +29,18 @@ export default function About() {
                     this, feel free to give other propositions.
                 </p>
             </section>
+
+            <section className="panel">
+                <h2 className="panel-title">Some interesting documentation</h2>
+                <p>Historical attempts at linking sound to light :</p>
+                <a href="https://chromatone.center/theory/interplay/visual-music/">Chromatone - Visual Music & the Poetics of Synaesthesia</a>
+                <br /><br />
+                <p>Biological predisposition to linking sound to light :</p>
+                <a href="https://chromatone.center/theory/interplay/synesthesia/">Chromatone - Synesthesia</a>
+                <br /><br />
+                <p>Scientifically linking sound to light :</p>
+                <a href="https://chromatone.center/theory/interplay/spectrum/">Chromatone - Chromatic spectrum</a>
+            </section>
         </>
     )
 }
