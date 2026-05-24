@@ -675,3 +675,19 @@ h1 .w2 {
 .switch-label .control-desc {
   grid-column: 2;
 }
+
+a {
+  color: var(--accent);
+}
+
+.footer-link {
+  color: var(--ink-faint);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+
+.footer-link:hover {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}

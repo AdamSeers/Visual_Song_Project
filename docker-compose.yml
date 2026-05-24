@@ -12,8 +12,8 @@ services:
 
   visual-song:
     build:
-      context: ./visual-song-frontend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: visual-song-flask/Dockerfile
     container_name: visual-song
     ports:
       - "5000:5000"
@@ -24,8 +24,8 @@ services:
     volumes:
       # Mount uploads/outputs to the host so videos persist after container
       # restarts and you can grab them from disk.
-      - ./visual-song-frontend/uploads:/app/uploads
-      - ./visual-song-frontend/outputs:/app/outputs
+      - ./visual-song-flask/uploads:/app/uploads
+      - ./visual-song-flask/outputs:/app/outputs
     depends_on:
       - color-api
     restart: unless-stopped

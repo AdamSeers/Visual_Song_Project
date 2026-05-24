@@ -110,20 +110,6 @@ def _run_image_job(job_id: str, input_path: str, output_path: str, display_name:
         except OSError:
             pass
 
-
-@app.route("/")
-def index():
-    return render_template("index.html")
-
-@app.route("/about")
-def about():
-    return render_template("about.html")
-
-@app.route("/live")
-def live():
-    return render_template("live.html")
-
-
 @app.route("/jobs", methods=["POST"])
 def submit_job():
     if "audio" not in request.files:
@@ -168,11 +154,6 @@ def submit_job():
     thread.start()
 
     return jsonify({"job_id": job_id}), 202
-
-@app.route("/images")
-def images_page():
-    return render_template("images.html")
-
 
 @app.route("/jobs/images", methods=["POST"])
 def submit_image_job():
@@ -236,6 +217,34 @@ def job_video(job_id: str):
         as_attachment=True,
         download_name=job.get("display_name", "visualization.mp4"),
     )
+
+
+
+
+
+# Path to the built React app. Set by Docker; for local dev pointing at
+# the sibling visual-song-react/dist folder.
+REACT_BUILD_DIR = os.environ.get(
+    "REACT_BUILD_DIR",
+    os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "visual-song-react", "dist")),
+)
+
+@app.route("/")
+@app.route("/<path:path>")
+def serve_react(path: str = ""):
+    """Serve the React SPA. Static files like /assets/foo.js get served
+    directly; everything else returns index.html so React Router can
+    handle client-side routing.
+    """
+    # If a built asset matches, serve it.
+    candidate = os.path.join(REACT_BUILD_DIR, path)
+    if path and os.path.isfile(candidate):
+        return send_from_directory(REACT_BUILD_DIR, path)
+    # Otherwise return the SPA shell.
+    return send_from_directory(REACT_BUILD_DIR, "index.html")
+
+
+
 
 if __name__ == "__main__":
     # Threaded so status polls don't queue behind the worker thread.

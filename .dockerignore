@@ -1,0 +1,18 @@
+# Don't ship build artifacts or caches
+**/__pycache__/
+**/*.pyc
+**/node_modules/
+**/.venv/
+**/venv/
+**/dist/
+**/build/
+**/bin/
+**/obj/
+
+# Don't ship user data
+visual-song-flask/uploads/
+visual-song-flask/outputs/
+
+# Don't ship secrets / local config
+**/.env
+**/.git/

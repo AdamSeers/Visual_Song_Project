@@ -28,7 +28,7 @@ Open <http://localhost:5000>.
 
 ```bash
 git clone <repo> Visual_Song_Project
-cd Visual_Song_Project\visual-song-frontend
+cd Visual_Song_Project\visual-song-flask
 pip install -r requirements.txt
 ```
 
@@ -44,7 +44,7 @@ dotnet run --launch-profile https
 Start the Flask app:
 
 ```bash
-cd Visual_Song_Project\visual-song-frontend
+cd Visual_Song_Project\visual-song-flask
 python app.py
 ```
 
