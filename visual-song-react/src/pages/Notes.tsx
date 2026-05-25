@@ -79,6 +79,7 @@ function startChord(
     ctx: AudioContext,
     buckets: ColorBucket[],
     transposeSemitones: number,
+    analyser: AnalyserNode,
 ): () => void {
     if (buckets.length === 0) return () => { }
 
@@ -86,7 +87,8 @@ function startChord(
     const master = ctx.createGain()
     master.gain.setValueAtTime(0, ctx.currentTime)
     master.gain.linearRampToValueAtTime(0.8, ctx.currentTime + 0.05)   // 50ms attack
-    master.connect(ctx.destination)
+    master.connect(analyser)
+    analyser.connect(ctx.destination)
 
     const weighted = buckets
         .map(b => ({
@@ -169,17 +171,97 @@ export default function Notes() {
     const [maxBuckets, setMaxBuckets] = useState(50)
     const [activeKey, setActiveKey] = useState<number | null>(null)
     const [octaveOffset, setOctaveOffset] = useState(0)
+    const [isProcessing, setIsProcessing] = useState(false)
     const fileInputRef = useRef<HTMLInputElement>(null)
     const audioCtxRef = useRef<AudioContext | null>(null)
+
+    //lissajous
+    const lissajousCanvasRef = useRef<HTMLCanvasElement>(null)
+    const analyserRef = useRef<AnalyserNode | null>(null)
+    const animationFrameRef = useRef<number | null>(null)
+    const isPlayingRef = useRef(false)
+    const releaseStartTimeRef = useRef<number | null>(null)
+
+    function startLissajousLoop() {
+        if (animationFrameRef.current !== null) return
+        const canvas = lissajousCanvasRef.current
+        const analyser = analyserRef.current
+        console.log('[lissajous] start; canvas:', canvas, 'analyser:', analyser)
+        if (!canvas || !analyser) {
+            console.warn('[lissajous] missing canvas or analyser — aborting')
+            return
+        }
+        const ctx2d = canvas.getContext('2d')
+        if (!ctx2d) return
+
+        const W = canvas.width, H = canvas.height
+        const waveform = new Float32Array(analyser.fftSize)
+        const RELEASE_MS = 500
+        let frameCount = 0
+
+        const draw = () => {
+            let opacity = 1
+            if (!isPlayingRef.current && releaseStartTimeRef.current !== null) {
+                const elapsed = performance.now() - releaseStartTimeRef.current
+                opacity = Math.max(0, 1 - elapsed / RELEASE_MS)
+                if (opacity <= 0) {
+                    ctx2d.fillStyle = '#000'
+                    ctx2d.fillRect(0, 0, W, H)
+                    animationFrameRef.current = null
+                    return
+                }
+            }
+
+            ctx2d.fillStyle = 'rgba(0, 0, 0, 0.25)'
+            ctx2d.fillRect(0, 0, W, H)
+
+            analyser.getFloatTimeDomainData(waveform)
+
+            // DIAGNOSTIC: log every 30 frames (~half second)
+            if (frameCount % 30 === 0) {
+                let max = 0
+                for (let i = 0; i < waveform.length; i++) max = Math.max(max, Math.abs(waveform[i]))
+                console.log('[lissajous] frame', frameCount, 'waveform peak:', max.toFixed(4), 'W/H:', W, H)
+            }
+            frameCount++
+
+            const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#7aa2f7'
+            ctx2d.globalAlpha = opacity
+            ctx2d.strokeStyle = accent
+            ctx2d.lineWidth = 1.5
+
+            const delay = 32
+            const samplesToDraw = Math.min(waveform.length - delay, 1024)
+            ctx2d.beginPath()
+            for (let i = 0; i < samplesToDraw; i++) {
+                const x = (waveform[i] * 0.9 + 1) * 0.5 * W
+                const y = (waveform[i + delay] * 0.9 + 1) * 0.5 * H
+                if (i === 0) ctx2d.moveTo(x, y)
+                else ctx2d.lineTo(x, y)
+            }
+            ctx2d.stroke()
+            ctx2d.globalAlpha = 1
+
+            animationFrameRef.current = requestAnimationFrame(draw)
+        }
+
+        draw()
+    }
 
     function getAudioContext(): AudioContext {
         if (!audioCtxRef.current) {
             audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)()
+            const analyser = audioCtxRef.current.createAnalyser()
+            analyser.fftSize = 2048
+            analyser.smoothingTimeConstant = 0
+            analyserRef.current = analyser
         }
         return audioCtxRef.current
     }
 
     function handleFile(file: File) {
+        setIsProcessing(true)
+        setBuckets([])   // clear any previous chord while we re-extract
         const reader = new FileReader()
         reader.onload = (e) => {
             const url = e.target?.result as string
@@ -187,19 +269,27 @@ export default function Notes() {
 
             const img = new Image()
             img.onload = () => {
-                // Downscale to a manageable size for pixel analysis (~300px max edge)
-                const maxEdge = 300
-                const scale = Math.min(1, maxEdge / Math.max(img.width, img.height))
-                const w = Math.floor(img.width * scale)
-                const h = Math.floor(img.height * scale)
-                const canvas = document.createElement('canvas')
-                canvas.width = w
-                canvas.height = h
-                const ctx = canvas.getContext('2d')!
-                ctx.drawImage(img, 0, 0, w, h)
-                const pixels = ctx.getImageData(0, 0, w, h)
-                const extracted = extractBuckets(pixels)
-                setBuckets(extracted)
+                // Defer the heavy work one tick so the spinner can paint first.
+                // Without this, the browser jumps straight from "no spinner" to
+                // "done" without ever rendering the spinner frame.
+                setTimeout(() => {
+                    const maxEdge = 300
+                    const scale = Math.min(1, maxEdge / Math.max(img.width, img.height))
+                    const w = Math.floor(img.width * scale)
+                    const h = Math.floor(img.height * scale)
+                    const canvas = document.createElement('canvas')
+                    canvas.width = w
+                    canvas.height = h
+                    const ctx = canvas.getContext('2d')!
+                    ctx.drawImage(img, 0, 0, w, h)
+                    const pixels = ctx.getImageData(0, 0, w, h)
+                    const extracted = extractBuckets(pixels)
+                    setBuckets(extracted)
+                    setIsProcessing(false)
+                }, 0)
+            }
+            img.onerror = () => {
+                setIsProcessing(false)
             }
             img.src = url
         }
@@ -213,7 +303,6 @@ export default function Notes() {
         if (buckets.length === 0) return
         const ctx = getAudioContext()
 
-        // Stop any currently-playing chord (e.g. user pressed a new key without releasing)
         if (stopChordRef.current) {
             stopChordRef.current()
             stopChordRef.current = null
@@ -223,7 +312,10 @@ export default function Notes() {
             .sort((a, b) => (b.count * b.saturation * b.brightness) - (a.count * a.saturation * a.brightness))
             .slice(0, maxBuckets)
 
-        stopChordRef.current = startChord(ctx, topBuckets, transposeSemitones + octaveOffset * 12)
+        stopChordRef.current = startChord(ctx, topBuckets, transposeSemitones + octaveOffset * 12, analyserRef.current!)
+        isPlayingRef.current = true
+        releaseStartTimeRef.current = null
+        startLissajousLoop()
     }
 
     function releaseKey() {
@@ -231,10 +323,13 @@ export default function Notes() {
             stopChordRef.current()
             stopChordRef.current = null
         }
+        isPlayingRef.current = false
+        releaseStartTimeRef.current = performance.now()
     }
 
     useEffect(() => {
         return () => {
+            if (animationFrameRef.current !== null) cancelAnimationFrame(animationFrameRef.current)
             if (stopChordRef.current) stopChordRef.current()
             if (audioCtxRef.current) audioCtxRef.current.close()
         }
@@ -245,9 +340,7 @@ export default function Notes() {
             <header className="masthead">
                 <h1><span className="word w1">Notes</span></h1>
                 <p className="lede">
-                    Upload an image. Every distinct color in it becomes a note, summed into a 5-second
-                    chord that&rsquo;s literally what the image &ldquo;sounds like.&rdquo; The piano below
-                    lets you transpose the whole chord up or down.
+                    Upload an image. Every distinct color becomes a note — its hue determines the pitch, its brightness the volume, its saturation the purity. All notes play simultaneously as a chord you can transpose with the piano below.
                 </p>
             </header>
 
@@ -275,7 +368,21 @@ export default function Notes() {
                     <img src={imageDataUrl} alt="uploaded" className="notes-preview" />
                 )}
 
-                {buckets.length > 0 && (
+                {isProcessing && (
+                    <div className="processing-indicator">
+                        <div className="spinner" aria-hidden="true"></div>
+                        <span>Converting image to sound&hellip;</span>
+                    </div>
+                )}
+
+                {!isProcessing && buckets.length > 0 && (
+                    <div className="processing-indicator success">
+                        <span className="check" aria-hidden="true">&#10003;</span>
+                        <span>Image converted &mdash; {buckets.length} colors detected</span>
+                    </div>
+                )}
+
+                {buckets.length > 0 && !isProcessing && (
                     <div className="control" style={{ marginTop: '1.25rem' }}>
                         <label htmlFor="max_buckets">
                             <span className="control-name">Notes played simultaneously</span>
@@ -302,12 +409,38 @@ export default function Notes() {
 
             {buckets.length > 0 && (
                 <section className="panel">
-                    <h2 className="panel-title"><span className="num">02</span> play the chord</h2>
-                    <p style={{ color: 'var(--ink-dim)', fontSize: '0.9rem', marginBottom: '1rem' }}>
-                        Press a piano key to play the chord at that pitch.
-                    </p>
+                    <div className="chord-header">
+                        <div className="chord-header-text">
+                            <h2 className="panel-title">
+                                <span className="num">02</span> play the chord
+                            </h2>
+                            <p>Press a piano key to play the chord at that pitch.</p>
+                        </div>
+                        <canvas
+                            ref={lissajousCanvasRef}
+                            className="lissajous"
+                            width={140}
+                            height={140}
+                        />
+                    </div>
 
-                    <div className="control" style={{ marginBottom: '1.25rem' }}>
+                    <div className="piano">
+                        {PIANO_KEYS.map((key, i) => (
+                            <button
+                                key={i}
+                                className={'piano-key ' + (key.black ? 'black' : 'white') + (activeKey === i ? ' active' : '')}
+                                onMouseDown={() => { setActiveKey(i); pressKey(key.semitone) }}
+                                onMouseUp={() => { setActiveKey(null); releaseKey() }}
+                                onMouseLeave={() => { if (activeKey === i) { setActiveKey(null); releaseKey() } }}
+                                onTouchStart={(e) => { e.preventDefault(); setActiveKey(i); pressKey(key.semitone) }}
+                                onTouchEnd={() => { setActiveKey(null); releaseKey() }}
+                            >
+                                <span className="piano-key-label">{key.label}</span>
+                            </button>
+                        ))}
+                    </div>
+
+                    <div className="control" style={{ marginTop: '1.25rem' }}>
                         <label htmlFor="octave_offset">
                             <span className="control-name">Octave</span>
                             <span className="control-desc">
@@ -326,22 +459,6 @@ export default function Notes() {
                             />
                             <output>{octaveOffset >= 0 ? '+' : ''}{octaveOffset}</output>
                         </div>
-                    </div>
-
-                    <div className="piano">
-                        {PIANO_KEYS.map((key, i) => (
-                            <button
-                                key={i}
-                                className={'piano-key ' + (key.black ? 'black' : 'white') + (activeKey === i ? ' active' : '')}
-                                onMouseDown={() => { setActiveKey(i); pressKey(key.semitone) }}
-                                onMouseUp={() => { setActiveKey(null); releaseKey() }}
-                                onMouseLeave={() => { if (activeKey === i) { setActiveKey(null); releaseKey() } }}
-                                onTouchStart={(e) => { e.preventDefault(); setActiveKey(i); pressKey(key.semitone) }}
-                                onTouchEnd={() => { setActiveKey(null); releaseKey() }}
-                            >
-                                <span className="piano-key-label">{key.label}</span>
-                            </button>
-                        ))}
                     </div>
                 </section>
             )}
