@@ -1,47 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-
-// ===== Color → frequency (same algorithm as Live page) =====
-// Returns the frequency in Hz that corresponds to a color when we treat
-// the doubled-up frequency of the color's wavelength as a musical pitch.
-function rgbToBaseFreq(r: number, g: number, b: number): number {
-    // Convert RGB to dominant wavelength via HSV hue
-    const max = Math.max(r, g, b)
-    const min = Math.min(r, g, b)
-    const delta = max - min
-    if (delta === 0) {
-        // Grey — pick middle of visible spectrum (~575 nm, yellow)
-        return wavelengthToHz(575)
-    }
-    let h: number
-    if (max === r) h = ((g - b) / delta) % 6
-    else if (max === g) h = (b - r) / delta + 2
-    else h = (r - g) / delta + 4
-    h *= 60
-    if (h < 0) h += 360
-    // Map hue (0..360) to visible wavelength (380..750 nm)
-    // Red (0°) → ~700 nm, Violet (270°) → ~400 nm
-    const wavelength = 700 - (h / 360) * 320
-    return wavelengthToHz(wavelength)
-}
-
-function wavelengthToHz(nm: number): number {
-    // Light freq in Hz = c / wavelength
-    const lightHz = 299792458 / (nm * 1e-9)
-    // Halve repeatedly until in audible range (~20 Hz – 20 kHz)
-    let f = lightHz
-    while (f > 500) f /= 2
-    return f
-}
-
-interface ColorBucket {
-    r: number
-    g: number
-    b: number
-    count: number
-    saturation: number
-    brightness: number
-    whiteness: number   // 1 = pure white, 0 = pure colour
-}
+import { type ColorBucket, rgbToBaseFreq, bucketWeight, startChord } from '../audio/colorChord'
 
 // Bucket pixels into ~30-step RGB cubes and aggregate
 function extractBuckets(imageData: ImageData): ColorBucket[] {
@@ -71,83 +29,6 @@ function extractBuckets(imageData: ImageData): ColorBucket[] {
     return Array.from(map.values())
 }
 
-// Generate a 5-second buffer of summed sines at every bucket's frequency.
-// transpose = semitone offset for the piano.
-// Start playing a chord from the given buckets, transposed by N semitones.
-// Returns a stop function that releases the chord with a smooth fade-out.
-function startChord(
-    ctx: AudioContext,
-    buckets: ColorBucket[],
-    transposeSemitones: number,
-    analyser: AnalyserNode,
-): () => void {
-    if (buckets.length === 0) return () => { }
-
-    // Master gain — so we can fade in on attack and fade out on release
-    const master = ctx.createGain()
-    master.gain.setValueAtTime(0, ctx.currentTime)
-    master.gain.linearRampToValueAtTime(0.8, ctx.currentTime + 0.05)   // 50ms attack
-    master.connect(analyser)
-    analyser.connect(ctx.destination)
-
-    const weighted = buckets
-        .map(b => ({
-            ...b,
-            weight: b.count * (0.2 + 0.8 * b.saturation) * (0.2 + 0.8 * b.brightness),
-        }))
-        .sort((a, b) => b.weight - a.weight)
-
-    const totalWeight = weighted.reduce((s, b) => s + b.weight, 0)
-    const transposeFactor = Math.pow(2, transposeSemitones / 12)
-
-    const oscillators: { osc: OscillatorNode; gain: GainNode }[] = []
-
-    for (const bucket of weighted) {
-        const baseFreq = rgbToBaseFreq(bucket.r, bucket.g, bucket.b)
-        const freq = baseFreq * transposeFactor
-        if (freq < 20 || freq > ctx.sampleRate / 2) continue
-
-        const amp = (bucket.weight / totalWeight) * 0.8
-
-        // Build partials: fundamental plus 2nd and 3rd if note is "impure" (white-ish)
-        const harmonics: { ratio: number; amp: number }[] = [{ ratio: 1, amp: 1.0 }]
-        if (bucket.whiteness > 0.3) {
-            const h = bucket.whiteness
-            harmonics.push({ ratio: 2, amp: 0.3 * h })
-            harmonics.push({ ratio: 3, amp: 0.15 * h })
-        }
-
-        for (const harm of harmonics) {
-            const partialFreq = freq * harm.ratio
-            if (partialFreq > ctx.sampleRate / 2) continue
-
-            const osc = ctx.createOscillator()
-            osc.type = 'sine'
-            osc.frequency.value = partialFreq
-
-            const gain = ctx.createGain()
-            gain.gain.value = amp * harm.amp
-
-            osc.connect(gain)
-            gain.connect(master)
-            osc.start()
-            oscillators.push({ osc, gain })
-        }
-    }
-
-    // Return a stop function that fades out and disconnects everything
-    return () => {
-        const now = ctx.currentTime
-        master.gain.cancelScheduledValues(now)
-        master.gain.setValueAtTime(master.gain.value, now)
-        master.gain.linearRampToValueAtTime(0, now + 0.3)   // 300ms release
-        // Stop each oscillator after the fade completes
-        for (const { osc } of oscillators) {
-            try { osc.stop(now + 0.35) } catch { }
-        }
-    }
-}
-
 // Piano key labels — one octave of semitones around C
 const PIANO_KEYS = [
     { label: 'C', semitone: -9, black: false },
@@ -164,6 +45,176 @@ const PIANO_KEYS = [
     { label: 'B', semitone: 2, black: false },
     { label: 'C', semitone: 3, black: false },
 ]
+
+interface NoteGraphProps {
+    buckets: ColorBucket[]
+    maxBuckets: number
+    octaveOffset: number
+}
+
+function NoteGraph({ buckets, maxBuckets, octaveOffset }: NoteGraphProps) {
+    if (buckets.length === 0) return null
+
+    // Get the top N buckets that will actually sound
+    const top = [...buckets]
+        .sort((a, b) => bucketWeight(b) - bucketWeight(a))
+        .slice(0, maxBuckets)
+
+    // Compute frequencies (with octave transposition applied so the graph
+    // matches what the user hears when pressing the "A" key at semitone 0)
+    const transposeFactor = Math.pow(2, octaveOffset)
+    const notes = top.map(b => ({
+        bucket: b,
+        freq: rgbToBaseFreq(b.r, b.g, b.b) * transposeFactor,
+        weight: bucketWeight(b),
+    }))
+
+    if (notes.length === 0) return null
+
+    const [hoveredIdx, setHoveredIdx] = useState<number | null>(null)
+
+    // Determine frequency range (log scale, since pitch is perceived
+    // logarithmically — an octave is a doubling of frequency)
+    const minFreq = Math.min(...notes.map(n => n.freq))
+    const maxFreq = Math.max(...notes.map(n => n.freq))
+    const maxWeight = Math.max(...notes.map(n => n.weight))
+
+    // SVG dimensions
+    const W = 600, H = 160
+    const PAD_LEFT = 30, PAD_RIGHT = 10, PAD_TOP = 10, PAD_BOTTOM = 30
+    const plotW = W - PAD_LEFT - PAD_RIGHT
+    const plotH = H - PAD_TOP - PAD_BOTTOM
+
+    // Position a frequency on the X axis (log scale, with a small margin
+    // so the leftmost and rightmost bars don't touch the edges)
+    const logMin = Math.log2(minFreq * 0.95)
+    const logMax = Math.log2(maxFreq * 1.05)
+    const freqToX = (f: number) => PAD_LEFT + ((Math.log2(f) - logMin) / (logMax - logMin)) * plotW
+
+    // Find octave gridlines within the visible range (powers of 2)
+    const gridlines: number[] = []
+    let g = Math.pow(2, Math.ceil(logMin))
+    while (g < Math.pow(2, logMax)) {
+        gridlines.push(g)
+        g *= 2
+    }
+
+    const BAR_WIDTH = 4
+
+    function freqToNoteName(freq: number): string {
+        // A4 = 440 Hz is our reference; convert to semitones away from A4
+        const semitonesFromA4 = 12 * Math.log2(freq / 440)
+        const rounded = Math.round(semitonesFromA4)
+        const cents = Math.round((semitonesFromA4 - rounded) * 100)
+        const names = ['A', 'A♯', 'B', 'C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯']
+        const noteIdx = ((rounded % 12) + 12) % 12
+        const octave = 4 + Math.floor((rounded + 9) / 12)   // A4 is reference; offset for C-based octaves
+        const centsStr = cents === 0 ? '' : (cents > 0 ? ` +${cents}¢` : ` ${cents}¢`)
+        return `${names[noteIdx]}${octave}${centsStr}`
+    }
+
+    const hovered = hoveredIdx !== null ? notes[hoveredIdx] : null
+
+    return (
+        <div className="note-graph">
+            <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet">
+                {/* Octave gridlines */}
+                {gridlines.map(freq => (
+                    <line
+                        key={freq}
+                        x1={freqToX(freq)} x2={freqToX(freq)}
+                        y1={PAD_TOP} y2={H - PAD_BOTTOM}
+                        stroke="var(--rule)"
+                        strokeDasharray="2,3"
+                    />
+                ))}
+
+                {/* Bars — one per note */}
+                {notes.map((note, i) => {
+                    const x = freqToX(note.freq)
+                    const heightPx = (note.weight / maxWeight) * plotH
+                    const y = H - PAD_BOTTOM - heightPx
+                    const { r, g, b } = note.bucket
+                    // Widen the hover hitbox so the bar isn't impossible to hit
+                    const HIT_PAD = 4
+                    return (
+                        <g key={i}>
+                            <rect
+                                x={x - BAR_WIDTH / 2}
+                                y={y}
+                                width={BAR_WIDTH}
+                                height={heightPx}
+                                fill={`rgb(${r}, ${g}, ${b})`}
+                                opacity={hoveredIdx === i ? 1 : 0.85}
+                            />
+                            {/* Invisible wider rect to catch hover */}
+                            <rect
+                                x={x - BAR_WIDTH / 2 - HIT_PAD}
+                                y={PAD_TOP}
+                                width={BAR_WIDTH + HIT_PAD * 2}
+                                height={plotH}
+                                fill="transparent"
+                                onMouseEnter={() => setHoveredIdx(i)}
+                                onMouseLeave={() => setHoveredIdx(null)}
+                                style={{ cursor: 'pointer' }}
+                            />
+                        </g>
+                    )
+                })}
+
+                {/* X-axis baseline */}
+                <line
+                    x1={PAD_LEFT} x2={W - PAD_RIGHT}
+                    y1={H - PAD_BOTTOM} y2={H - PAD_BOTTOM}
+                    stroke="var(--rule)"
+                />
+
+                {/* Frequency labels on gridlines */}
+                {gridlines.map(freq => (
+                    <text
+                        key={freq}
+                        x={freqToX(freq)}
+                        y={H - PAD_BOTTOM + 16}
+                        fill="var(--ink-faint)"
+                        fontSize="10"
+                        textAnchor="middle"
+                        fontFamily="JetBrains Mono, monospace"
+                    >
+                        {freq < 1000 ? `${Math.round(freq)}Hz` : `${(freq / 1000).toFixed(1)}kHz`}
+                    </text>
+                ))}
+
+                {/* Y-axis label */}
+                <text
+                    x={PAD_LEFT - 8} y={PAD_TOP + plotH / 2}
+                    fill="var(--ink-faint)"
+                    fontSize="10"
+                    textAnchor="end"
+                    fontFamily="JetBrains Mono, monospace"
+                    transform={`rotate(-90, ${PAD_LEFT - 8}, ${PAD_TOP + plotH / 2})`}
+                >
+                    weight
+                </text>
+            </svg>
+            {hovered && (
+                <div
+                    className="note-tooltip"
+                    style={{
+                        left: `${(freqToX(hovered.freq) / W) * 100}%`,
+                    }}
+                >
+                    <div className="note-tooltip-swatch" style={{ background: `rgb(${hovered.bucket.r}, ${hovered.bucket.g}, ${hovered.bucket.b})` }} />
+                    <div className="note-tooltip-text">
+                        <div className="note-tooltip-pitch">{freqToNoteName(hovered.freq)}</div>
+                        <div className="note-tooltip-detail">
+                            {Math.round(hovered.freq)} Hz · rgb({hovered.bucket.r}, {hovered.bucket.g}, {hovered.bucket.b})
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    )
+}
 
 export default function Notes() {
     const [imageDataUrl, setImageDataUrl] = useState<string | null>(null)
@@ -309,7 +360,7 @@ export default function Notes() {
         }
 
         const topBuckets = [...buckets]
-            .sort((a, b) => (b.count * b.saturation * b.brightness) - (a.count * a.saturation * a.brightness))
+            .sort((a, b) => bucketWeight(b) - bucketWeight(a))
             .slice(0, maxBuckets)
 
         stopChordRef.current = startChord(ctx, topBuckets, transposeSemitones + octaveOffset * 12, analyserRef.current!)
@@ -338,7 +389,7 @@ export default function Notes() {
     return (
         <>
             <header className="masthead">
-                <h1><span className="word w1">Notes</span></h1>
+                <h1><span className="word w1">Image to sound</span></h1>
                 <p className="lede">
                     Upload an image. Every distinct color becomes a note — its hue determines the pitch, its brightness the volume, its saturation the purity. All notes play simultaneously as a chord you can transpose with the piano below.
                 </p>
@@ -406,6 +457,20 @@ export default function Notes() {
                     </div>
                 )}
             </section>
+
+            {buckets.length > 0 && (
+                <section className="panel">
+                    <h2 className="panel-title">notes detected</h2>
+                    <p style={{ color: 'var(--ink-dim)', fontSize: '0.9rem', marginBottom: '1rem' }}>
+                        Each bar is a note in the chord. Position = pitch, height = volume, color = source color from your image.
+                    </p>
+                    <NoteGraph
+                        buckets={buckets}
+                        maxBuckets={maxBuckets}
+                        octaveOffset={octaveOffset}
+                    />
+                </section>
+            )}
 
             {buckets.length > 0 && (
                 <section className="panel">
