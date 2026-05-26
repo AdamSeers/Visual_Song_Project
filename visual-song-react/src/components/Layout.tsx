@@ -1,10 +1,35 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
 import { applyTheme, resetTheme, getStoredTheme, useTheme } from '../hooks/useTheme'
+
+const NAV_SECTIONS = [
+    {
+        title: 'Sound to light',
+        items: [
+            { to: '/', label: 'Song → Colors', end: true },
+            { to: '/images', label: 'Song → Images', end: false },
+            { to: '/live', label: 'Microphone → Colors', end: false },
+        ],
+    },
+    {
+        title: 'Light to sound',
+        items: [
+            { to: '/notes', label: 'Image → Sound', end: false },
+            { to: '/song', label: 'Colors → Sounds', end: false },
+        ],
+    },
+    {
+        title: 'Info',
+        items: [
+            { to: '/about', label: 'About', end: false },
+        ],
+    },
+]
 
 export default function Layout() {
     useTheme()
     const [accent, setAccent] = useState(getStoredTheme())
+    const [sidebarOpen, setSidebarOpen] = useState(false)
 
     const handleAccentChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const val = e.target.value
@@ -17,45 +42,87 @@ export default function Layout() {
         setAccent('#7aa2f7')
     }
 
+    // Close sidebar on Escape key
+    useEffect(() => {
+        if (!sidebarOpen) return
+        const handler = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') setSidebarOpen(false)
+        }
+        window.addEventListener('keydown', handler)
+        return () => window.removeEventListener('keydown', handler)
+    }, [sidebarOpen])
+
+    // Lock body scroll when sidebar is open
+    useEffect(() => {
+        document.body.style.overflow = sidebarOpen ? 'hidden' : ''
+        return () => { document.body.style.overflow = '' }
+    }, [sidebarOpen])
+
     return (
         <>
-            <nav className="topnav">
+            <header className="topbar">
                 <NavLink to="/" className="brand">
+                    <img src="/logo.png" alt="" className="brand-logo" />
                     <span className="brand-name">Visual Song Project</span>
                 </NavLink>
-                <ul className="nav-links">
-                    <li>
-                        <NavLink to="/" end className={({ isActive }) => 'nav-link' + (isActive ? ' active' : '')}>
-                            Home
-                        </NavLink>
-                    </li>
-                    <li>
-                        <NavLink to="/live" className={({ isActive }) => 'nav-link' + (isActive ? ' active' : '')}>
-                            Live
-                        </NavLink>
-                    </li>
-                    <li>
-                        <NavLink to="/images" className={({ isActive }) => 'nav-link' + (isActive ? ' active' : '')}>
-                            Images
-                        </NavLink>
-                    </li>
-                    <li>
-                        <NavLink to="/notes" className={({ isActive }) => 'nav-link' + (isActive ? ' active' : '')}>
-                            Notes
-                        </NavLink>
-                    </li>
-                    <li>
-                        <NavLink to="/song" className={({ isActive }) => 'nav-link' + (isActive ? ' active' : '')}>
-                            Song
-                        </NavLink>
-                    </li>
-                    <li>
-                        <NavLink to="/about" className={({ isActive }) => 'nav-link' + (isActive ? ' active' : '')}>
-                            About
-                        </NavLink>
-                    </li>
-                </ul>
-            </nav>
+                <button
+                    type="button"
+                    className="hamburger"
+                    onClick={() => setSidebarOpen(true)}
+                    aria-label="Open navigation"
+                    aria-expanded={sidebarOpen}
+                >
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </button>
+            </header>
+
+            {/* Backdrop — clickable to close */}
+            <div
+                className={'sidebar-backdrop' + (sidebarOpen ? ' open' : '')}
+                onClick={() => setSidebarOpen(false)}
+                aria-hidden="true"
+            />
+
+            {/* Sliding sidebar */}
+            <aside
+                className={'sidebar' + (sidebarOpen ? ' open' : '')}
+                aria-label="Site navigation"
+                inert={!sidebarOpen}
+            >
+                <div className="sidebar-header">
+                    <span className="sidebar-title">Navigate</span>
+                    <button
+                        type="button"
+                        className="sidebar-close"
+                        onClick={() => setSidebarOpen(false)}
+                        aria-label="Close navigation"
+                    >
+                        &times;
+                    </button>
+                </div>
+
+                <nav className="sidebar-nav">
+                    {NAV_SECTIONS.map(section => (
+                        <div key={section.title} className="sidebar-section">
+                            <div className="sidebar-section-title">{section.title}</div>
+                            {section.items.map(item => (
+                                <NavLink
+                                    key={item.to}
+                                    to={item.to}
+                                    end={item.end}
+                                    onClick={() => setSidebarOpen(false)}
+                                    className={({ isActive }) => 'sidebar-link' + (isActive ? ' active' : '')}
+                                >
+                                    <span className="sidebar-link-bullet" aria-hidden="true">&#9656;</span>
+                                    <span className="sidebar-link-label">{item.label}</span>
+                                </NavLink>
+                            ))}
+                        </div>
+                    ))}
+                </nav>
+            </aside>
 
             <div className="spectrum-bar" aria-hidden="true"></div>
 
@@ -72,7 +139,7 @@ export default function Layout() {
                     <a href="https://www.paypal.com/paypalme/adamseers"
                         target="_blank" rel="noopener noreferrer"
                         className="footer-link">
-                        Please support me on PayPal so I can keep this website up
+                        Please consider supporting me on PayPal so I can keep this website up
                     </a>
                     <span className="footer-theme" title="Theme color">
                         <input

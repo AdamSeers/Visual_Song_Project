@@ -110,7 +110,7 @@ export default function Images() {
     return (
         <>
             <header className="masthead">
-                <h1><span className="word w1">Sound to images</span></h1>
+                <h1><span className="word w1">Song to images</span></h1>
                 <p className="lede">
                     Upload a song. The tempo is detected, and the video cuts between images chosen to
                     match the colors of each beat. Loud notes contribute more strongly to the color

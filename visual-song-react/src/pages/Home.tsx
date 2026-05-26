@@ -110,7 +110,7 @@ export default function Home() {
     return (
         <>
             <header className="masthead">
-                <h1><span className="word w1">Visual Song</span></h1>
+                <h1><span className="word w1">Song to colors</span></h1>
                 <p className="lede">
                     Upload a song and get back a video where every pitch is rendered as a colored shape.
                     The colors aren&rsquo;t arbitrary &mdash; each musical frequency is doubled into the

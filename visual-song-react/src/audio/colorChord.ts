@@ -36,7 +36,8 @@ export function wavelengthToHz(nm: number): number {
 }
 
 export function bucketWeight(b: ColorBucket): number {
-    return b.count * (0.2 + 0.8 * b.saturation) * (0.2 + 0.8 * b.brightness)
+    // brightness squared so darker = much quieter, pure black = silent
+    return b.count * (0.2 + 0.8 * b.saturation) * (b.brightness * b.brightness)
 }
 
 // Build a ColorBucket from a single hex color string ("#rrggbb").
@@ -88,16 +89,39 @@ export function startChord(
     const oscillators: { osc: OscillatorNode; gain: GainNode }[] = []
 
     for (const bucket of weighted) {
+        if (bucket.weight <= 0) continue   // pure black, etc. — contributes nothing
         const baseFreq = rgbToBaseFreq(bucket.r, bucket.g, bucket.b)
         const freq = baseFreq * transposeFactor
         if (freq < 20 || freq > ctx.sampleRate / 2) continue
 
         const amp = (bucket.weight / totalWeight) * 0.8
-        const harmonics: { ratio: number; amp: number }[] = [{ ratio: 1, amp: 1.0 }]
-        if (bucket.whiteness > 0.3) {
-            const h = bucket.whiteness
-            harmonics.push({ ratio: 2, amp: 0.3 * h })
-            harmonics.push({ ratio: 3, amp: 0.15 * h })
+        // As whiteness rises, the fundamental fades and many detuned partials
+        // take over — turning a defined pitch into a band of frequencies that
+        // sounds like noise rather than a recognizable note.
+        const whiteness = bucket.whiteness
+        const purity = 1 - whiteness          // 1 = pure tone, 0 = pure white = full noise
+
+        const harmonics: { ratio: number; amp: number }[] = []
+
+        // Fundamental: strong when pure, weak when white
+        harmonics.push({ ratio: 1, amp: purity })
+
+        // Add a few harmonics that grow with whiteness — gives "less pure" feel
+        if (whiteness > 0.1) {
+            harmonics.push({ ratio: 2, amp: 0.3 * whiteness })
+            harmonics.push({ ratio: 3, amp: 0.2 * whiteness })
+        }
+
+        // For VERY white colors, scatter additional detuned partials across
+        // a wider range so the result reads as noise, not a chord tone.
+        if (whiteness > 0.5) {
+            const noiseStrength = (whiteness - 0.5) * 2   // 0 at w=0.5, 1 at w=1
+            // Inharmonic ratios (not integer multiples) — these don't fuse with
+            // the fundamental, so the ear perceives them as noise/texture.
+            const inharmonicRatios = [1.41, 1.73, 2.24, 2.83, 3.46, 4.12]
+            for (const r of inharmonicRatios) {
+                harmonics.push({ ratio: r, amp: 0.12 * noiseStrength })
+            }
         }
 
         for (const harm of harmonics) {
@@ -224,7 +248,7 @@ export function buildChord(rootNote: string, chordType: string, octave: number =
 // Uses OfflineAudioContext, which runs faster than real-time and avoids
 // blocking the UI.
 
-export type SongTransition = 'cut' | 'fade' | 'crossfade'
+export type SongTransition = 'cut' | 'fade'
 
 export interface SongPanel {
     colors: ColorBucket[]
@@ -248,38 +272,21 @@ export async function renderSongToBuffer(
     const totalSamples = Math.ceil(totalSec * sampleRate)
     const offlineCtx = new OfflineAudioContext(1, totalSamples, sampleRate)
 
-    const FADE_SEC = 0.05      // 50 ms for cut/fade attack/release
-    const CROSSFADE_SEC = 0.4  // 400 ms crossfade overlap
+    const CUT_SEC = 0.01    // 10 ms — almost instant
+    const FADE_SEC = 0.15   // 150 ms — clearly audible fade
 
     let currentTime = 0
     for (let i = 0; i < panels.length; i++) {
         const panel = panels[i]
         const prevPanel = i > 0 ? panels[i - 1] : null
 
-        // How does this panel come IN? Depends on the PREVIOUS panel's transition.
-        const fadeInSec =
-            prevPanel?.transition === 'crossfade' ? CROSSFADE_SEC :
-                prevPanel?.transition === 'cut' ? FADE_SEC :
-                    FADE_SEC   // 'fade' or no previous
+        // How this panel comes IN: depends on the PREVIOUS panel's transition.
+        const fadeInSec = prevPanel?.transition === 'cut' ? CUT_SEC : FADE_SEC
 
-        // How does this panel go OUT? Its own transition.
-        const fadeOutSec =
-            panel.transition === 'crossfade' ? CROSSFADE_SEC :
-                panel.transition === 'cut' ? FADE_SEC :
-                    FADE_SEC
+        // How this panel goes OUT: its own transition (or just clean end if it's the last).
+        const fadeOutSec = panel.transition === 'cut' ? CUT_SEC : FADE_SEC
 
-        // If previous panel was a crossfade, this panel starts EARLY by CROSSFADE_SEC
-        const adjustedStart = prevPanel?.transition === 'crossfade'
-            ? currentTime - CROSSFADE_SEC
-            : currentTime
-
-        schedulePanelChord(
-            offlineCtx,
-            panel,
-            Math.max(0, adjustedStart),
-            fadeInSec,
-            fadeOutSec,
-        )
+        schedulePanelChord(offlineCtx, panel, currentTime, fadeInSec, fadeOutSec)
         currentTime += panel.durationSec
     }
 
@@ -311,15 +318,38 @@ function schedulePanelChord(
     const totalWeight = weighted.reduce((s, b) => s + b.weight, 0) || 1
 
     for (const bucket of weighted) {
+        if (bucket.weight <= 0) continue
         const baseFreq = rgbToBaseFreq(bucket.r, bucket.g, bucket.b)
         if (baseFreq < 20 || baseFreq > ctx.sampleRate / 2) continue
 
         const amp = (bucket.weight / totalWeight) * 0.8
-        const harmonics: { ratio: number; amp: number }[] = [{ ratio: 1, amp: 1.0 }]
-        if (bucket.whiteness > 0.3) {
-            const h = bucket.whiteness
-            harmonics.push({ ratio: 2, amp: 0.3 * h })
-            harmonics.push({ ratio: 3, amp: 0.15 * h })
+        // As whiteness rises, the fundamental fades and many detuned partials
+        // take over — turning a defined pitch into a band of frequencies that
+        // sounds like noise rather than a recognizable note.
+        const whiteness = bucket.whiteness
+        const purity = 1 - whiteness          // 1 = pure tone, 0 = pure white = full noise
+
+        const harmonics: { ratio: number; amp: number }[] = []
+
+        // Fundamental: strong when pure, weak when white
+        harmonics.push({ ratio: 1, amp: purity })
+
+        // Add a few harmonics that grow with whiteness — gives "less pure" feel
+        if (whiteness > 0.1) {
+            harmonics.push({ ratio: 2, amp: 0.3 * whiteness })
+            harmonics.push({ ratio: 3, amp: 0.2 * whiteness })
+        }
+
+        // For VERY white colors, scatter additional detuned partials across
+        // a wider range so the result reads as noise, not a chord tone.
+        if (whiteness > 0.5) {
+            const noiseStrength = (whiteness - 0.5) * 2   // 0 at w=0.5, 1 at w=1
+            // Inharmonic ratios (not integer multiples) — these don't fuse with
+            // the fundamental, so the ear perceives them as noise/texture.
+            const inharmonicRatios = [1.41, 1.73, 2.24, 2.83, 3.46, 4.12]
+            for (const r of inharmonicRatios) {
+                harmonics.push({ ratio: r, amp: 0.12 * noiseStrength })
+            }
         }
 
         for (const harm of harmonics) {
@@ -336,4 +366,73 @@ function schedulePanelChord(
             osc.stop(endTime)
         }
     }
+}
+
+// ===== Image → top-N colors =====
+// Used by both the Notes and Song pages to turn an uploaded image into
+// a palette. Returns hex strings (the format Song's color picker uses).
+
+export async function extractTopColorsFromImage(
+    file: File,
+    maxColors: number = 5,
+): Promise<string[]> {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onerror = () => reject(new Error('Failed to read file'))
+        reader.onload = (e) => {
+            const url = e.target?.result as string
+            const img = new Image()
+            img.onerror = () => reject(new Error('Failed to decode image'))
+            img.onload = () => {
+                // Downscale for fast analysis
+                const maxEdge = 300
+                const scale = Math.min(1, maxEdge / Math.max(img.width, img.height))
+                const w = Math.floor(img.width * scale)
+                const h = Math.floor(img.height * scale)
+                const canvas = document.createElement('canvas')
+                canvas.width = w
+                canvas.height = h
+                const ctx = canvas.getContext('2d')
+                if (!ctx) { reject(new Error('Canvas context unavailable')); return }
+                ctx.drawImage(img, 0, 0, w, h)
+                const pixels = ctx.getImageData(0, 0, w, h)
+                const buckets = extractBucketsFromPixels(pixels)
+                const top = [...buckets]
+                    .sort((a, b) => bucketWeight(b) - bucketWeight(a))
+                    .slice(0, maxColors)
+                resolve(top.map(b => rgbToHex(b.r, b.g, b.b)))
+            }
+            img.src = url
+        }
+        reader.readAsDataURL(file)
+    })
+}
+
+function extractBucketsFromPixels(imageData: ImageData): ColorBucket[] {
+    const data = imageData.data
+    const map = new Map<string, ColorBucket>()
+    const STEP = 30
+    for (let i = 0; i < data.length; i += 4) {
+        const r = data[i], g = data[i + 1], b = data[i + 2]
+        const alpha = data[i + 3]
+        if (alpha < 32) continue
+        const key = `${Math.floor(r / STEP)},${Math.floor(g / STEP)},${Math.floor(b / STEP)}`
+        const existing = map.get(key)
+        if (existing) {
+            existing.count++
+        } else {
+            const max = Math.max(r, g, b)
+            const min = Math.min(r, g, b)
+            const brightness = max / 255
+            const saturation = max === 0 ? 0 : (max - min) / max
+            const whiteness = min / 255
+            map.set(key, { r, g, b, count: 1, saturation, brightness, whiteness })
+        }
+    }
+    return Array.from(map.values())
+}
+
+function rgbToHex(r: number, g: number, b: number): string {
+    const c = (v: number) => v.toString(16).padStart(2, '0')
+    return `#${c(r)}${c(g)}${c(b)}`
 }

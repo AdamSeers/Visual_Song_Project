@@ -1,4 +1,4 @@
-import { Mp3Encoder } from 'lamejs'
+import { Mp3Encoder } from '@breezystack/lamejs'
 
 export function encodeAudioBufferToMp3(buffer: AudioBuffer, kbps: number = 128): Blob {
     const sampleRate = buffer.sampleRate
@@ -9,8 +9,8 @@ export function encodeAudioBufferToMp3(buffer: AudioBuffer, kbps: number = 128):
     const left = floatTo16(buffer.getChannelData(0))
     const right = channels > 1 ? floatTo16(buffer.getChannelData(1)) : undefined
 
-    const mp3Data: Int8Array[] = []
-    const blockSize = 1152   // standard MP3 frame size
+    const mp3Data: Uint8Array[] = []
+    const blockSize = 1152
     for (let i = 0; i < left.length; i += blockSize) {
         const leftChunk = left.subarray(i, i + blockSize)
         const rightChunk = right ? right.subarray(i, i + blockSize) : undefined
@@ -20,8 +20,9 @@ export function encodeAudioBufferToMp3(buffer: AudioBuffer, kbps: number = 128):
     const flushed = encoder.flush()
     if (flushed.length > 0) mp3Data.push(flushed)
 
-    // Convert Int8Array chunks to ArrayBuffers explicitly typed.
-    // lamejs's Int8Array might be backed by SharedArrayBuffer, which Blob rejects.
+    // Copy each chunk's bytes into a fresh ArrayBuffer. `Blob` accepts
+    // ArrayBuffer directly, which sidesteps TypeScript's strict tracking
+    // of whether a TypedArray is backed by ArrayBuffer or SharedArrayBuffer.
     const blobParts: ArrayBuffer[] = mp3Data.map(chunk => {
         const buf = new ArrayBuffer(chunk.length)
         new Uint8Array(buf).set(chunk)

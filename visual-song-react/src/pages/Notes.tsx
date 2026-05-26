@@ -233,11 +233,12 @@ export default function Notes() {
     const isPlayingRef = useRef(false)
     const releaseStartTimeRef = useRef<number | null>(null)
 
+    const [dragOver, setDragOver] = useState(false)
+
     function startLissajousLoop() {
         if (animationFrameRef.current !== null) return
         const canvas = lissajousCanvasRef.current
         const analyser = analyserRef.current
-        console.log('[lissajous] start; canvas:', canvas, 'analyser:', analyser)
         if (!canvas || !analyser) {
             console.warn('[lissajous] missing canvas or analyser — aborting')
             return
@@ -272,7 +273,6 @@ export default function Notes() {
             if (frameCount % 30 === 0) {
                 let max = 0
                 for (let i = 0; i < waveform.length; i++) max = Math.max(max, Math.abs(waveform[i]))
-                console.log('[lissajous] frame', frameCount, 'waveform peak:', max.toFixed(4), 'W/H:', W, H)
             }
             frameCount++
 
@@ -398,7 +398,19 @@ export default function Notes() {
             <section className="panel">
                 <h2 className="panel-title"><span className="num">01</span> drop in an image</h2>
 
-                <label className="dropzone">
+                <label
+                    className={'dropzone' + (dragOver ? ' drag' : '') + (imageDataUrl ? ' has-file' : '')}
+                    onDragEnter={(e) => { e.preventDefault(); e.stopPropagation(); setDragOver(true) }}
+                    onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setDragOver(true) }}
+                    onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); setDragOver(false) }}
+                    onDrop={(e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        setDragOver(false)
+                        const file = e.dataTransfer.files[0]
+                        if (file && file.type.startsWith('image/')) handleFile(file)
+                    }}
+                >
                     <input
                         type="file"
                         accept="image/*"
@@ -409,7 +421,9 @@ export default function Notes() {
                     <div className="dropzone-inner">
                         <div className="dz-icon" aria-hidden="true">&#127912;</div>
                         <div className="dz-text">
-                            <span className="dz-primary">{imageDataUrl ? 'change image' : 'choose an image'}</span>
+                            <span className="dz-primary">
+                                {imageDataUrl ? 'change image' : 'drop an image or click to choose'}
+                            </span>
                             <span className="dz-secondary">jpg · png · webp · gif</span>
                         </div>
                     </div>

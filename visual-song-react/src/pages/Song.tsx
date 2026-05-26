@@ -2,9 +2,10 @@ import { useEffect, useRef, useState } from 'react'
 import {
     type ColorBucket, colorFromHex, startChord,
     buildChord, NOTE_NAMES, CHORD_RECIPES,
+    extractTopColorsFromImage,
 } from '../audio/colorChord'
 
-type Transition = 'cut' | 'fade' | 'crossfade'
+type Transition = 'cut' | 'fade'
 
 interface Panel {
     id: number              // stable identity for React keys and edits
@@ -16,6 +17,7 @@ interface Panel {
 const DEFAULT_BPM = 90
 const BEAT_OPTIONS = [0.25, 0.5, 1, 1.5, 2, 3, 4]
 const DEFAULT_COLOR = '#7aa2f7'
+const STORAGE_KEY = 'visualsong-song-v1'
 
 let nextPanelId = 1
 function makePanel(colors: string[] = [], beats: number = 1, transition: Transition = 'fade'): Panel {
@@ -23,10 +25,31 @@ function makePanel(colors: string[] = [], beats: number = 1, transition: Transit
 }
 
 export default function Song() {
-    const [bpm, setBpm] = useState(DEFAULT_BPM)
-    const [panels, setPanels] = useState<Panel[]>([
-        makePanel([DEFAULT_COLOR], 1),
-    ])
+    const [bpm, setBpm] = useState<number>(() => {
+        try {
+            const saved = localStorage.getItem(STORAGE_KEY)
+            if (saved) return JSON.parse(saved).bpm ?? DEFAULT_BPM
+        } catch { }
+        return DEFAULT_BPM
+    })
+    const [panels, setPanels] = useState<Panel[]>(() => {
+        try {
+            const saved = localStorage.getItem(STORAGE_KEY)
+            if (saved) {
+                const parsed = JSON.parse(saved)
+                if (Array.isArray(parsed.panels)) {
+                    // Reassign fresh IDs so React keys stay stable
+                    return parsed.panels.map((p: any) => ({
+                        id: nextPanelId++,
+                        colors: Array.isArray(p.colors) ? p.colors : [],
+                        beats: typeof p.beats === 'number' ? p.beats : 1,
+                        transition: p.transition === 'cut' ? 'cut' : 'fade',
+                    }))
+                }
+            }
+        } catch { }
+        return []
+    })
     const [playingPanelIdx, setPlayingPanelIdx] = useState<number | null>(null)
     const [quickRoot, setQuickRoot] = useState('C')
     const [quickType, setQuickType] = useState('major')
@@ -43,6 +66,28 @@ export default function Song() {
     const [loop, setLoop] = useState(false)
     const loopRef = useRef(false)
     useEffect(() => { loopRef.current = loop }, [loop])
+
+    useEffect(() => {
+        try {
+            const data = {
+                bpm, panels: panels.map(p => ({
+                    colors: p.colors,
+                    beats: p.beats,
+                    transition: p.transition,
+                }))
+            }
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
+        } catch {
+            // Storage full or unavailable — silently ignore
+        }
+    }, [bpm, panels])
+    const [showClearConfirm, setShowClearConfirm] = useState(false)
+
+    const [imageDragOver, setImageDragOver] = useState(false)
+    const [isExtractingImage, setIsExtractingImage] = useState(false)
+    const imageInputRef = useRef<HTMLInputElement>(null)
+
+    const previewColors = buildChord(quickRoot, quickType)
 
     function reorderPanels(fromIdx: number, toIdx: number) {
         if (fromIdx === toIdx) return
@@ -94,6 +139,20 @@ export default function Song() {
     function addPanel() {
         setPanels(p => [...p, makePanel([DEFAULT_COLOR], 1)])
     }
+    async function addPanelFromImage(file: File) {
+        if (!file.type.startsWith('image/')) return
+        setIsExtractingImage(true)
+        try {
+            const colors = await extractTopColorsFromImage(file, 5)
+            if (colors.length === 0) return
+            setPanels(p => [...p, { id: nextPanelId++, colors, beats: 1, transition: 'fade' }])
+        } catch (err) {
+            console.error('Failed to extract colors from image:', err)
+            alert('Could not read that image.')
+        } finally {
+            setIsExtractingImage(false)
+        }
+    }
     function addChordPanel(root: string, type: string) {
         const colors = buildChord(root, type)
         setPanels(p => [...p, { id: nextPanelId++, colors, beats: 1, transition: 'fade' }])
@@ -139,6 +198,24 @@ export default function Song() {
         ))
     }
 
+    function clearSong() {
+        if (panels.length > 0 && !confirm('Clear all panels and reset BPM to default?')) return
+        setBpm(DEFAULT_BPM)
+        setPanels([])
+        localStorage.removeItem(STORAGE_KEY)
+    }
+    function requestClear() {
+        if (panels.length === 0) return    // nothing to clear, no need to prompt
+        setShowClearConfirm(true)
+    }
+
+    function confirmClear() {
+        setBpm(DEFAULT_BPM)
+        setPanels([])
+        localStorage.removeItem(STORAGE_KEY)
+        setShowClearConfirm(false)
+    }
+
     // ----- preview playback (live oscillators, sequential) -----
     function stopPlayback() {
         if (stopChordRef.current) { stopChordRef.current(); stopChordRef.current = null }
@@ -153,8 +230,6 @@ export default function Song() {
         stopPlayback()
         const ctx = getAudioContext()
         const beatDurationSec = 60 / bpm
-
-        const CROSSFADE_MS = 400
 
         const playPanel = (idx: number) => {
             if (idx >= panels.length) {
@@ -175,30 +250,15 @@ export default function Song() {
             const panelDurationMs = panel.beats * beatDurationSec * 1000
 
             const startNext = () => {
-                // For crossfade we kept the previous chord going; stop it now
-                if (panel.transition === 'crossfade' && stopChordRef.current) {
-                    stopChordRef.current()
-                    stopChordRef.current = null
-                }
                 playPanel(idx + 1)
             }
 
-            if (panel.transition === 'crossfade' && idx + 1 < panels.length) {
-                // Start next chord slightly before stopping current
-                stopChordRef.current = startChord(ctx, buckets, 0)
-                playbackTimerRef.current = window.setTimeout(
-                    startNext,
-                    Math.max(0, panelDurationMs - CROSSFADE_MS),
-                )
-            } else {
-                // cut or fade: stop previous, start this one cleanly
-                if (stopChordRef.current) {
-                    stopChordRef.current()
-                    stopChordRef.current = null
-                }
-                stopChordRef.current = startChord(ctx, buckets, 0)
-                playbackTimerRef.current = window.setTimeout(startNext, panelDurationMs)
+            if (stopChordRef.current) {
+                stopChordRef.current()
+                stopChordRef.current = null
             }
+            stopChordRef.current = startChord(ctx, buckets, 0)
+            playbackTimerRef.current = window.setTimeout(startNext, panelDurationMs)
         }
 
         playPanel(0)
@@ -287,22 +347,73 @@ export default function Song() {
                     </div>
                     <button
                         type="button"
-                        className="btn"
+                        className="btn chord-preview-btn"
                         onClick={() => addChordPanel(quickRoot, quickType)}
                     >
                         <span>add {quickRoot} {quickType} as panel</span>
+                        <span className="chord-preview-swatches" aria-hidden="true">
+                            {previewColors.map((color, i) => (
+                                <span
+                                    key={i}
+                                    className="chord-preview-swatch"
+                                    style={{ background: color }}
+                                />
+                            ))}
+                        </span>
                         <span className="btn-arrow" aria-hidden="true">+</span>
                     </button>
                 </div>
             </section>
 
-            <section className="panel">
+            <section
+                className={'panel' + (imageDragOver ? ' panel-image-drag' : '')}
+                onDragEnter={(e) => {
+                    // Only react to file drags, not panel-reorder drags
+                    if (e.dataTransfer.types.includes('Files')) {
+                        e.preventDefault()
+                        setImageDragOver(true)
+                    }
+                }}
+                onDragOver={(e) => {
+                    if (e.dataTransfer.types.includes('Files')) {
+                        e.preventDefault()
+                        setImageDragOver(true)
+                    }
+                }}
+                onDragLeave={(e) => {
+                    // Only clear if we're leaving the section, not entering a child
+                    if (e.currentTarget.contains(e.relatedTarget as Node)) return
+                    setImageDragOver(false)
+                }}
+                onDrop={(e) => {
+                    if (!e.dataTransfer.types.includes('Files')) return
+                    e.preventDefault()
+                    setImageDragOver(false)
+                    const file = e.dataTransfer.files[0]
+                    if (file) addPanelFromImage(file)
+                }}
+            >
                 <h2 className="panel-title">
                     <span className="num">03</span> panels &middot; {panels.length} panel{panels.length === 1 ? '' : 's'} &middot; {totalSec.toFixed(1)}s
+
+                    <button
+                        type="button"
+                        className="icon-btn icon-btn-danger song-clear-btn"
+                        onClick={requestClear}
+                        disabled={isPlaying || isExporting || panels.length === 0}
+                        title="Clear all panels"
+                        aria-label="Clear all panels"
+                    >
+                        &#10227;
+                    </button>
                 </h2>
 
                 <div className="song-panels">
-                    {panels.map((panel, panelIdx) => (
+                    {panels.length === 0 ? (
+                        <div className="song-empty">
+                            <p>No panels yet. Add one below or use the quick chord builder.</p>
+                        </div>
+                    ) : panels.map((panel, panelIdx) => (
                         <div
                             key={panel.id}
                             className={
@@ -346,16 +457,17 @@ export default function Song() {
                                         <option key={b} value={b}>{b} beat{b === 1 ? '' : 's'}</option>
                                     ))}
                                 </select>
-                                <select
-                                    value={panel.transition}
-                                    onChange={(e) => updateTransition(panelIdx, e.target.value as Transition)}
-                                    className="song-panel-beats"
-                                    title="Transition to next panel"
-                                >
-                                    <option value="cut">cut</option>
-                                    <option value="fade">fade</option>
-                                    <option value="crossfade">crossfade</option>
-                                </select>
+                                {panelIdx < panels.length - 1 && (
+                                    <select
+                                        value={panel.transition}
+                                        onChange={(e) => updateTransition(panelIdx, e.target.value as Transition)}
+                                        className="song-panel-beats"
+                                        title="Transition to next panel"
+                                    >
+                                        <option value="cut">cut</option>
+                                        <option value="fade">fade</option>
+                                    </select>
+                                )}
                                 <div className="song-panel-actions">
                                     <button
                                         type="button"
@@ -370,7 +482,6 @@ export default function Song() {
                                         className="icon-btn icon-btn-danger"
                                         title="Delete panel"
                                         aria-label="Delete panel"
-                                        disabled={panels.length === 1}
                                     >&times;</button>
                                 </div>
                             </div>
@@ -407,15 +518,47 @@ export default function Song() {
                     ))}
                 </div>
 
-                <button
-                    type="button"
-                    onClick={addPanel}
-                    className="circle-btn circle-btn-large"
-                    title="Add panel"
-                    aria-label="Add panel"
-                >+</button>
+                <div className="song-add-row">
+                    <button
+                        type="button"
+                        onClick={addPanel}
+                        className="circle-btn circle-btn-large"
+                        title="Add empty panel"
+                        aria-label="Add empty panel"
+                    >+</button>
+                    <button
+                        type="button"
+                        onClick={() => imageInputRef.current?.click()}
+                        className="circle-btn circle-btn-large"
+                        title="Add panel from image"
+                        aria-label="Add panel from image"
+                        disabled={isExtractingImage}
+                    >
+                        {isExtractingImage ? (
+                            <span>…</span>
+                        ) : (
+                            <svg viewBox="0 0 24 24" width="18" height="18" fill="none"
+                                stroke="currentColor" strokeWidth="1.8"
+                                strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                <rect x="3" y="5" width="18" height="14" rx="1.5" />
+                                <circle cx="8.5" cy="10" r="1.5" />
+                                <path d="M3 17l5.5-5.5 4 4L16 12l5 5" />
+                            </svg>
+                        )}
+                    </button>
+                    <input
+                        type="file"
+                        accept="image/*"
+                        hidden
+                        ref={imageInputRef}
+                        onChange={(e) => {
+                            const f = e.target.files?.[0]
+                            if (f) addPanelFromImage(f)
+                            if (imageInputRef.current) imageInputRef.current.value = ''
+                        }}
+                    />
+                </div>
             </section>
-
             <section className="panel">
                 <h2 className="panel-title"><span className="num">04</span> play</h2>
                 <div className="song-playback-controls">
@@ -423,7 +566,7 @@ export default function Song() {
                         type="button"
                         className="btn"
                         onClick={isPlaying ? stopPlayback : playSong}
-                        disabled={isExporting}
+                        disabled={isExporting || panels.length === 0}
                     >
                         <span>{isPlaying ? 'stop' : 'play'}</span>
                         <span className="btn-arrow" aria-hidden="true">{isPlaying ? '◼' : '▶'}</span>
@@ -442,7 +585,7 @@ export default function Song() {
                         type="button"
                         className="btn btn-secondary"
                         onClick={exportMp3}
-                        disabled={isPlaying || isExporting}
+                        disabled={isPlaying || isExporting || panels.length === 0}
                     >
                         <span>{isExporting ? 'exporting…' : 'download MP3'}</span>
                         <span className="btn-arrow" aria-hidden="true">&darr;</span>
@@ -454,6 +597,41 @@ export default function Song() {
                     </span>
                 </div>
             </section>
+
+            {showClearConfirm && (
+                <div
+                    className="modal-backdrop"
+                    onClick={() => setShowClearConfirm(false)}
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="clear-confirm-title"
+                >
+                    <div className="modal" onClick={(e) => e.stopPropagation()}>
+                        <h3 id="clear-confirm-title" className="modal-title">Clear all panels?</h3>
+                        <p className="modal-body">
+                            This will remove all {panels.length} panel{panels.length === 1 ? '' : 's'} and
+                            reset the tempo to {DEFAULT_BPM} BPM. This cannot be undone.
+                        </p>
+                        <div className="modal-actions">
+                            <button
+                                type="button"
+                                className="btn btn-secondary"
+                                onClick={() => setShowClearConfirm(false)}
+                            >
+                                <span>cancel</span>
+                            </button>
+                            <button
+                                type="button"
+                                className="btn modal-danger-btn"
+                                onClick={confirmClear}
+                            >
+                                <span>clear all</span>
+                                <span className="btn-arrow" aria-hidden="true">&times;</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </>
     )
 }
