@@ -7,7 +7,7 @@ The visual song project is a project started by [Adam Seers](https://www.linkedi
 Install Docker Desktop
 
 ```bash
-git clone [https://github.com/AdamSeers/Visual_Song_Project.git](https://github.com/AdamSeers/Visual_Song_Project.git) Visual_Song_Project
+git clone https://github.com/AdamSeers/Visual_Song_Project.git Visual_Song_Project
 cd Visual_Song_Project
 docker compose up --build
 ```
@@ -27,7 +27,7 @@ Open <http://localhost:5000>.
 ### Setup
 
 ```bash
-git clone [https://github.com/AdamSeers/Visual_Song_Project.git](https://github.com/AdamSeers/Visual_Song_Project.git) Visual_Song_Project
+git clone https://github.com/AdamSeers/Visual_Song_Project.git Visual_Song_Project
 cd Visual_Song_Project\visual-song-flask
 pip install -r requirements.txt
 ```
