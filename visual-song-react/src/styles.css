@@ -1491,3 +1491,13 @@ h1 .w2 {
     gap: 0.85rem;
   }
 }
+
+.icon-btn-preview {
+  font-size: 0.7rem;
+  /* the play/stop glyphs are small unicode */
+}
+
+.icon-btn-preview.active {
+  color: var(--accent);
+  border-color: var(--accent);
+}

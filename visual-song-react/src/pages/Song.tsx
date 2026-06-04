@@ -65,6 +65,10 @@ export default function Song() {
 
     const [loop, setLoop] = useState(false)
     const loopRef = useRef(false)
+
+    const previewStopRef = useRef<(() => void) | null>(null)
+    const [previewingIdx, setPreviewingIdx] = useState<number | null>(null)
+
     useEffect(() => { loopRef.current = loop }, [loop])
 
     useEffect(() => {
@@ -221,6 +225,7 @@ export default function Song() {
     }
 
     function playSong() {
+        stopPreview()
         stopPlayback()
         const ctx = getAudioContext()
         const beatDurationSec = 60 / bpm
@@ -258,10 +263,54 @@ export default function Song() {
         playPanel(0)
     }
 
+    function previewPanel(panelIdx: number) {
+        // If song is playing, stop it first — only one playback at a time
+        if (isPlaying) stopPlayback()
+
+        // If this panel is already previewing, stop it (toggle)
+        if (previewingIdx === panelIdx) {
+            stopPreview()
+            return
+        }
+
+        // Stop any other preview
+        stopPreview()
+
+        const ctx = getAudioContext()
+        const panel = panels[panelIdx]
+        const buckets: ColorBucket[] = panel.colors.map(colorFromHex)
+        if (buckets.length === 0) return
+
+        previewStopRef.current = startChord(ctx, buckets, 0)
+        setPreviewingIdx(panelIdx)
+
+        // Auto-stop after panel.beats at current BPM
+        const beatDurationSec = 60 / bpm
+        const durationMs = panel.beats * beatDurationSec * 1000
+        window.setTimeout(() => {
+            // Only stop if this preview is still the active one
+            // (the user could have started a different preview in the meantime)
+            if (previewStopRef.current) {
+                previewStopRef.current()
+                previewStopRef.current = null
+            }
+            setPreviewingIdx(curr => curr === panelIdx ? null : curr)
+        }, durationMs)
+    }
+
+    function stopPreview() {
+        if (previewStopRef.current) {
+            previewStopRef.current()
+            previewStopRef.current = null
+        }
+        setPreviewingIdx(null)
+    }
+
     // Cleanup on unmount
     useEffect(() => {
         return () => {
             stopPlayback()
+            stopPreview()
             if (audioCtxRef.current) audioCtxRef.current.close()
         }
     }, [])
@@ -463,6 +512,16 @@ export default function Song() {
                                     </select>
                                 )}
                                 <div className="song-panel-actions">
+                                    <button
+                                        type="button"
+                                        onClick={() => previewPanel(panelIdx)}
+                                        className={'icon-btn icon-btn-preview' + (previewingIdx === panelIdx ? ' active' : '')}
+                                        title={previewingIdx === panelIdx ? 'Stop preview' : 'Preview panel'}
+                                        aria-label={previewingIdx === panelIdx ? 'Stop preview' : 'Preview panel'}
+                                        disabled={panel.colors.length === 0}
+                                    >
+                                        {previewingIdx === panelIdx ? '◼' : '▶'}
+                                    </button>
                                     <button
                                         type="button"
                                         onClick={() => duplicatePanel(panelIdx)}
