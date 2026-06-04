@@ -48,7 +48,14 @@ cd Visual_Song_Project\visual-song-flask
 python app.py
 ```
 
-Open <http://localhost:5000>.
+Start the React app:
+
+```bash
+cd Visual_Song_Project\visual-song-react
+npm run dev
+```
+
+Open <http://localhost:5173/>.
 
 ## Configuration
 
