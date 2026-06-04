@@ -198,12 +198,6 @@ export default function Song() {
         ))
     }
 
-    function clearSong() {
-        if (panels.length > 0 && !confirm('Clear all panels and reset BPM to default?')) return
-        setBpm(DEFAULT_BPM)
-        setPanels([])
-        localStorage.removeItem(STORAGE_KEY)
-    }
     function requestClear() {
         if (panels.length === 0) return    // nothing to clear, no need to prompt
         setShowClearConfirm(true)
