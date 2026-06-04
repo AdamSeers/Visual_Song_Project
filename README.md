@@ -4,11 +4,25 @@ The visual song project is a project started by [Adam Seers](https://www.linkedi
 
 ## Setup Docker
 
-Install Docker Desktop
-
+First install Docker Desktop and open it. Then do:
 ```bash
 git clone https://github.com/AdamSeers/Visual_Song_Project.git Visual_Song_Project
 cd Visual_Song_Project
+```
+
+In the Visual_Song_Project folder, add a docker-compose.override.yml file with the following content:
+```yml
+services:
+  visual-song:
+    ports:
+      - "5000:5000"
+  color-api:
+    ports:
+      - "5050:5050"
+```
+
+Then run:
+```bash
 docker compose up --build
 ```
 
