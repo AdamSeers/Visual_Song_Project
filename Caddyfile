@@ -1,0 +1,4 @@
+visualsongproject.com,
+www.visualsongproject.com {
+    reverse_proxy visual-song: 5000
+}
