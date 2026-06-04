@@ -1,6 +1,6 @@
 # [Visual Song Project](https://visualsongproject.com/)
 
-The [visual song project](https://visualsongproject.com/) is a project started by [Adam Seers](https://www.linkedin.com/in/adam-seers-69122336a) to try to discover if there is a cognitive link between light and sound harmony. The goal of the website is to have a fun tool to play around with to facilitate the potential discovery of such a link. 
+The visual song project is a project started by [Adam Seers](https://www.linkedin.com/in/adam-seers-69122336a) to try to discover if there is a cognitive link between light and sound harmony. The goal of the website is to have a fun tool to play around with to facilitate the potential discovery of such a link. 
 
 ## Setup Docker
 
