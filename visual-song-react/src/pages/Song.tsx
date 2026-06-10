@@ -14,45 +14,109 @@ interface Panel {
     transition: Transition  // how this panel transitions OUT to the next
 }
 
+const SONGS_KEY = 'visualsong-songs-v1'
+const CURRENT_SONG_KEY = 'visualsong-current-id'
+const OLD_STORAGE_KEY = 'visualsong-song-v1'   // migration only
+
+interface SavedSong {
+    id: string
+    name: string
+    bpm: number
+    panels: { colors: string[]; beats: number; transition: 'cut' | 'fade' }[]
+    updatedAt: number
+}
+
+let nextPanelId = 1
+
+function generateId(): string {
+    return Date.now().toString(36) + Math.random().toString(36).slice(2, 5)
+}
+
+function generateName(): string {
+    const now = new Date()
+    const month = now.toLocaleString('en', { month: 'short' })
+    const day = now.getDate()
+    const h = now.getHours().toString().padStart(2, '0')
+    const m = now.getMinutes().toString().padStart(2, '0')
+    return `Song — ${month} ${day}, ${h}:${m}`
+}
+
+function loadAllSongs(): SavedSong[] {
+    try {
+        const raw = localStorage.getItem(SONGS_KEY)
+        if (raw) {
+            const parsed = JSON.parse(raw)
+            if (Array.isArray(parsed) && parsed.length > 0) return parsed
+        }
+    } catch { }
+    // Migrate from old single-song format
+    try {
+        const old = localStorage.getItem(OLD_STORAGE_KEY)
+        if (old) {
+            const parsed = JSON.parse(old)
+            if (parsed.bpm || parsed.panels) {
+                return [{
+                    id: generateId(),
+                    name: 'My Song',
+                    bpm: parsed.bpm ?? DEFAULT_BPM,
+                    panels: Array.isArray(parsed.panels) ? parsed.panels : [],
+                    updatedAt: Date.now(),
+                }]
+            }
+        }
+    } catch { }
+    return []
+}
+
+// Runs once at module load. Gives useState its initial values.
+function initSongState() {
+    let songs = loadAllSongs()
+    if (songs.length === 0) {
+        const first: SavedSong = {
+            id: generateId(),
+            name: generateName(),
+            bpm: DEFAULT_BPM,
+            panels: [],
+            updatedAt: Date.now(),
+        }
+        songs = [first]
+        try { localStorage.setItem(SONGS_KEY, JSON.stringify(songs)) } catch { }
+    }
+    let currentId = songs[0].id
+    try {
+        const stored = localStorage.getItem(CURRENT_SONG_KEY)
+        if (stored && songs.some(s => s.id === stored)) currentId = stored
+    } catch { }
+    const song = songs.find(s => s.id === currentId) ?? songs[0]
+    const panels: Panel[] = song.panels.map(p => ({
+        id: nextPanelId++,
+        colors: Array.isArray(p.colors) ? p.colors : [],
+        beats: typeof p.beats === 'number' ? p.beats : 1,
+        transition: p.transition === 'cut' ? 'cut' : 'fade',
+    }))
+    return { songs, currentId, bpm: song.bpm, panels }
+}
+
+const _init = initSongState()
 const DEFAULT_BPM = 90
 const BEAT_OPTIONS = [0.25, 0.5, 1, 1.5, 2, 3, 4]
 const DEFAULT_COLOR = '#7aa2f7'
-const STORAGE_KEY = 'visualsong-song-v1'
 
-let nextPanelId = 1
 function makePanel(colors: string[] = [], beats: number = 1, transition: Transition = 'fade'): Panel {
     return { id: nextPanelId++, colors, beats, transition }
 }
 
 export default function Song() {
-    const [bpm, setBpm] = useState<number>(() => {
-        try {
-            const saved = localStorage.getItem(STORAGE_KEY)
-            if (saved) return JSON.parse(saved).bpm ?? DEFAULT_BPM
-        } catch { }
-        return DEFAULT_BPM
-    })
-    const [panels, setPanels] = useState<Panel[]>(() => {
-        try {
-            const saved = localStorage.getItem(STORAGE_KEY)
-            if (saved) {
-                const parsed = JSON.parse(saved)
-                if (Array.isArray(parsed.panels)) {
-                    // Reassign fresh IDs so React keys stay stable
-                    return parsed.panels.map((p: any) => ({
-                        id: nextPanelId++,
-                        colors: Array.isArray(p.colors) ? p.colors : [],
-                        beats: typeof p.beats === 'number' ? p.beats : 1,
-                        transition: p.transition === 'cut' ? 'cut' : 'fade',
-                    }))
-                }
-            }
-        } catch { }
-        return []
-    })
+    const [allSongs, setAllSongs] = useState<SavedSong[]>(_init.songs)
+    const [currentSongId, setCurrentSongId] = useState<string>(_init.currentId)
+    const [bpm, setBpm] = useState<number>(_init.bpm)
+    const [panels, setPanels] = useState<Panel[]>(_init.panels)
     const [playingPanelIdx, setPlayingPanelIdx] = useState<number | null>(null)
     const [quickRoot, setQuickRoot] = useState('C')
     const [quickType, setQuickType] = useState('major')
+    const [isRenaming, setIsRenaming] = useState(false)
+    const [renameValue, setRenameValue] = useState('')
+    const renameInputRef = useRef<HTMLInputElement>(null)
 
     const audioCtxRef = useRef<AudioContext | null>(null)
     const stopChordRef = useRef<(() => void) | null>(null)
@@ -71,21 +135,34 @@ export default function Song() {
 
     useEffect(() => { loopRef.current = loop }, [loop])
 
+    // Auto-save the active song whenever bpm or panels change
     useEffect(() => {
-        try {
-            const data = {
-                bpm, panels: panels.map(p => ({
-                    colors: p.colors,
-                    beats: p.beats,
-                    transition: p.transition,
-                }))
-            }
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
-        } catch {
-            // Storage full or unavailable — silently ignore
-        }
+        if (!currentSongId) return
+        const serialized = panels.map(p => ({
+            colors: p.colors,
+            beats: p.beats,
+            transition: p.transition,
+        }))
+        setAllSongs(prev => {
+            const updated = prev.map(s => s.id === currentSongId
+                ? { ...s, bpm, panels: serialized, updatedAt: Date.now() }
+                : s
+            )
+            try { localStorage.setItem(SONGS_KEY, JSON.stringify(updated)) } catch { }
+            return updated
+        })
     }, [bpm, panels])
-    const [showClearConfirm, setShowClearConfirm] = useState(false)
+
+    // Persist the active song ID
+    useEffect(() => {
+        try { localStorage.setItem(CURRENT_SONG_KEY, currentSongId) } catch { }
+    }, [currentSongId])
+    const [confirmDialog, setConfirmDialog] = useState<{
+        title: string
+        body: string
+        confirmLabel: string
+        onConfirm: () => void
+    } | null>(null)
 
     const [imageDragOver, setImageDragOver] = useState(false)
     const [isExtractingImage, setIsExtractingImage] = useState(false)
@@ -203,15 +280,32 @@ export default function Song() {
     }
 
     function requestClear() {
-        if (panels.length === 0) return    // nothing to clear, no need to prompt
-        setShowClearConfirm(true)
+        if (panels.length === 0) return
+        setConfirmDialog({
+            title: 'Clear all panels?',
+            body: `This will remove all ${panels.length} panel${panels.length === 1 ? '' : 's'} and reset the tempo to ${DEFAULT_BPM} BPM. This cannot be undone.`,
+            confirmLabel: 'clear all',
+            onConfirm: confirmClear,
+        })
     }
 
     function confirmClear() {
         setBpm(DEFAULT_BPM)
         setPanels([])
-        localStorage.removeItem(STORAGE_KEY)
-        setShowClearConfirm(false)
+        setConfirmDialog(null)
+    }
+
+    function requestDeleteSong() {
+        const current = allSongs.find(s => s.id === currentSongId)
+        const isLast = allSongs.length === 1
+        setConfirmDialog({
+            title: isLast ? 'Clear this song?' : 'Delete this song?',
+            body: isLast
+                ? `"${current?.name}" will be cleared. This cannot be undone.`
+                : `"${current?.name}" will be permanently deleted. This cannot be undone.`,
+            confirmLabel: isLast ? 'clear' : 'delete',
+            onConfirm: deleteCurrentSong,
+        })
     }
 
     // ----- preview playback (live oscillators, sequential) -----
@@ -261,6 +355,99 @@ export default function Song() {
         }
 
         playPanel(0)
+    }
+
+    function saveCurrent(songsSnapshot: SavedSong[]): SavedSong[] {
+        // Explicitly persist the current working state into the song list.
+        // Called before switching so we don't lose edits.
+        const serialized = panels.map(p => ({
+            colors: p.colors, beats: p.beats, transition: p.transition,
+        }))
+        return songsSnapshot.map(s => s.id === currentSongId
+            ? { ...s, bpm, panels: serialized, updatedAt: Date.now() }
+            : s
+        )
+    }
+
+    function switchToSong(song: SavedSong) {
+        stopPlayback()
+        // Save current before switching
+        setAllSongs(prev => {
+            const updated = saveCurrent(prev)
+            try { localStorage.setItem(SONGS_KEY, JSON.stringify(updated)) } catch { }
+            return updated
+        })
+        setCurrentSongId(song.id)
+        setBpm(song.bpm)
+        setPanels(song.panels.map(p => ({
+            id: nextPanelId++,
+            colors: Array.isArray(p.colors) ? p.colors : [],
+            beats: typeof p.beats === 'number' ? p.beats : 1,
+            transition: p.transition === 'cut' ? 'cut' : 'fade',
+        })))
+    }
+
+    function createSong() {
+        const newSong: SavedSong = {
+            id: generateId(),
+            name: generateName(),
+            bpm: DEFAULT_BPM,
+            panels: [],
+            updatedAt: Date.now(),
+        }
+        setAllSongs(prev => {
+            const saved = saveCurrent(prev)
+            const updated = [...saved, newSong]
+            try { localStorage.setItem(SONGS_KEY, JSON.stringify(updated)) } catch { }
+            return updated
+        })
+        setCurrentSongId(newSong.id)
+        setBpm(DEFAULT_BPM)
+        setPanels([])
+        stopPlayback()
+    }
+
+    function deleteCurrentSong() {
+        if (allSongs.length === 1) {
+            // Last song — just clear it instead of deleting
+            setBpm(DEFAULT_BPM)
+            setPanels([])
+            return
+        }
+        const idx = allSongs.findIndex(s => s.id === currentSongId)
+        const newSongs = allSongs.filter(s => s.id !== currentSongId)
+        const nextSong = newSongs[Math.max(0, idx - 1)]
+        try { localStorage.setItem(SONGS_KEY, JSON.stringify(newSongs)) } catch { }
+        setAllSongs(newSongs)
+        setCurrentSongId(nextSong.id)
+        setBpm(nextSong.bpm)
+        setPanels(nextSong.panels.map(p => ({
+            id: nextPanelId++,
+            colors: p.colors,
+            beats: p.beats,
+            transition: p.transition as 'cut' | 'fade',
+        })))
+        stopPlayback()
+    }
+
+    function startRename() {
+        const current = allSongs.find(s => s.id === currentSongId)
+        setRenameValue(current?.name ?? '')
+        setIsRenaming(true)
+        setTimeout(() => renameInputRef.current?.select(), 30)
+    }
+
+    function commitRename() {
+        if (!renameValue.trim()) { setIsRenaming(false); return }
+        setAllSongs(prev => {
+            const updated = prev.map(s => s.id === currentSongId
+                ? { ...s, name: renameValue.trim() }
+                : s
+            )
+            try { localStorage.setItem(SONGS_KEY, JSON.stringify(updated)) } catch { }
+            return updated
+        })
+        setIsRenaming(false)
     }
 
     function previewPanel(panelIdx: number) {
@@ -321,6 +508,65 @@ export default function Song() {
 
     return (
         <>
+            <div className="song-manager">
+                <button
+                    type="button"
+                    className="song-manager-btn"
+                    onClick={requestDeleteSong}
+                    title={allSongs.length === 1 ? 'Clear song' : 'Delete song'}
+                    aria-label="Delete song"
+                >
+                    &minus;
+                </button>
+
+                {isRenaming ? (
+                    <input
+                        ref={renameInputRef}
+                        className="song-manager-input"
+                        value={renameValue}
+                        onChange={e => setRenameValue(e.target.value)}
+                        onBlur={commitRename}
+                        onKeyDown={e => {
+                            if (e.key === 'Enter') commitRename()
+                            if (e.key === 'Escape') setIsRenaming(false)
+                        }}
+                        autoFocus
+                    />
+                ) : (
+                    <select
+                        className="song-manager-select"
+                        value={currentSongId}
+                        onChange={e => {
+                            const song = allSongs.find(s => s.id === e.target.value)
+                            if (song) switchToSong(song)
+                        }}
+                    >
+                        {allSongs.map(s => (
+                            <option key={s.id} value={s.id}>{s.name}</option>
+                        ))}
+                    </select>
+                )}
+
+                <button
+                    type="button"
+                    className="song-manager-btn"
+                    onClick={isRenaming ? commitRename : startRename}
+                    title={isRenaming ? 'Confirm rename' : 'Rename song'}
+                    aria-label={isRenaming ? 'Confirm rename' : 'Rename song'}
+                >
+                    {isRenaming ? '✓' : '✏'}
+                </button>
+
+                <button
+                    type="button"
+                    className="song-manager-btn song-manager-new"
+                    onClick={createSong}
+                    title="New song"
+                    aria-label="New song"
+                >
+                    +
+                </button>
+            </div>
             <header className="masthead">
                 <h1><span className="word w1">Colors to sounds</span></h1>
                 <p className="lede">
@@ -651,34 +897,34 @@ export default function Song() {
                 </div>
             </section>
 
-            {showClearConfirm && (
+            {confirmDialog && (
                 <div
                     className="modal-backdrop"
-                    onClick={() => setShowClearConfirm(false)}
+                    onClick={() => setConfirmDialog(null)}
                     role="dialog"
                     aria-modal="true"
-                    aria-labelledby="clear-confirm-title"
+                    aria-labelledby="confirm-title"
                 >
-                    <div className="modal" onClick={(e) => e.stopPropagation()}>
-                        <h3 id="clear-confirm-title" className="modal-title">Clear all panels?</h3>
-                        <p className="modal-body">
-                            This will remove all {panels.length} panel{panels.length === 1 ? '' : 's'} and
-                            reset the tempo to {DEFAULT_BPM} BPM. This cannot be undone.
-                        </p>
+                    <div className="modal" onClick={e => e.stopPropagation()}>
+                        <h3 id="confirm-title" className="modal-title">{confirmDialog.title}</h3>
+                        <p className="modal-body">{confirmDialog.body}</p>
                         <div className="modal-actions">
                             <button
                                 type="button"
                                 className="btn btn-secondary"
-                                onClick={() => setShowClearConfirm(false)}
+                                onClick={() => setConfirmDialog(null)}
                             >
                                 <span>cancel</span>
                             </button>
                             <button
                                 type="button"
                                 className="btn modal-danger-btn"
-                                onClick={confirmClear}
+                                onClick={() => {
+                                    confirmDialog.onConfirm()
+                                    setConfirmDialog(null)
+                                }}
                             >
-                                <span>clear all</span>
+                                <span>{confirmDialog.confirmLabel}</span>
                                 <span className="btn-arrow" aria-hidden="true">&times;</span>
                             </button>
                         </div>

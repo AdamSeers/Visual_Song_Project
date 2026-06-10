@@ -16,6 +16,7 @@ const NAV_SECTIONS = [
         items: [
             { to: '/notes', label: 'Image → Sound', end: false },
             { to: '/song', label: 'Colors → Sounds', end: false },
+            { to: '/camera', label: 'Camera → Sounds', end: false },
         ],
     },
     {

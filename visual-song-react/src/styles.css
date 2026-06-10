@@ -1501,3 +1501,112 @@ h1 .w2 {
   color: var(--accent);
   border-color: var(--accent);
 }
+
+/* ===== Song manager (multi-song selector) ===== */
+.song-manager {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 2rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.song-manager-select {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-2);
+  color: var(--ink);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  padding: 0.45rem 0.65rem;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: border-color 120ms ease;
+}
+
+.song-manager-select:hover,
+.song-manager-select:focus {
+  border-color: var(--ink-faint);
+  outline: none;
+}
+
+.song-manager-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-2);
+  color: var(--ink);
+  border: 1px solid var(--accent);
+  border-radius: 2px;
+  padding: 0.45rem 0.65rem;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+  letter-spacing: 0.04em;
+  outline: none;
+}
+
+.song-manager-btn {
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  color: var(--ink-dim);
+  cursor: pointer;
+  font-size: 0.9rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+
+.song-manager-btn:hover {
+  color: var(--ink);
+  border-color: var(--ink-faint);
+}
+
+.song-manager-new {
+  font-size: 1.2rem;
+  font-weight: 300;
+  border-style: dashed;
+}
+
+.song-manager-new:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* --- Camera --- */
+.camera-feed {
+  width: 100%;
+  height: auto;
+  background: #000;
+  border-radius: 2px;
+  display: block;
+}
+
+.camera-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  min-height: 52px;
+  align-items: center;
+}
+
+.camera-swatch {
+  width: 52px;
+  height: 52px;
+  border-radius: 3px;
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  flex-shrink: 0;
+  transition: background 300ms ease;
+}
+
+.camera-no-colors {
+  color: var(--ink-faint);
+  font-size: 0.85rem;
+  letter-spacing: 0.1em;
+}

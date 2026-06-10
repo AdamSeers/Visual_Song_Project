@@ -8,6 +8,7 @@ import Images from './pages/Images'
 import Notes from './pages/Notes'
 import Song from './pages/Song'
 import About from './pages/About'
+import Camera from './pages/Camera'
 import './styles.css'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
@@ -21,6 +22,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           <Route path="/notes" element={<Notes />} />
           <Route path="/song" element={<Song />} />
           <Route path="/about" element={<About />} />
+          <Route path="/camera" element={<Camera />} />
         </Route>
       </Routes>
     </BrowserRouter>

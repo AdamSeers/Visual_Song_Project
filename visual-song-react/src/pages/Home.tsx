@@ -115,7 +115,7 @@ export default function Home() {
                     Upload a song and get back a video where every pitch is rendered as a colored shape.
                     The colors aren&rsquo;t arbitrary &mdash; each musical frequency is doubled into the
                     visible light spectrum, so an A becomes a particular orange, an E becomes a violet,
-                    and so on, with all octaves of the same note sharing the same color. Louder notes
+                    and so on, with all octaves of the same note sharing the same color.<br /><br />Louder notes
                     are brighter; purer tones are more saturated, while voice or strings come out softer
                     because of their overtones. Rounder shapes are mellow timbres, squarer ones are
                     brighter timbres.
