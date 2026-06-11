@@ -247,7 +247,7 @@ def serve_react(path: str = ""):
 @app.route('/sitemap.xml')
 def sitemap():
     xml = """<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/0.9">
+<urlset xmlns="http://www.sitemaps.org/sitemap/0.9">
   <url><loc>https://visualsongproject.com/</loc></url>
   <url><loc>https://visualsongproject.com/images</loc></url>
   <url><loc>https://visualsongproject.com/live</loc></url>
