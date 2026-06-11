@@ -8,6 +8,7 @@ export default defineConfig({
     proxy: {
       // Forward API calls to Flask during development
       '/jobs': 'http://localhost:5000',
+      '/mux-video': 'http://localhost:5000',
     },
   },
   build: {

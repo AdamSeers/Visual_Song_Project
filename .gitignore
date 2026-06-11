@@ -1,1 +1,4 @@
 docker-compose.override.yml
+
+The .wasm is ~30 MB — too big for git. Add to your .gitignore:
+#visual-song-react/public/ffmpeg/

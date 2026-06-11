@@ -9,9 +9,10 @@ import uuid
 from typing import Dict
 import atexit
 import subprocess
+import tempfile
 import shutil
 
-from flask import Flask, jsonify, render_template, request, send_from_directory, Response
+from flask import Flask, jsonify, render_template, request, send_from_directory, Response, send_file, abort
 from werkzeug.utils import secure_filename
 
 from visualizer.pipeline import process_audio_to_video
@@ -23,7 +24,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 ALLOWED_EXTENSIONS = {"mp3", "wav", "flac", "ogg", "m4a", "aac", "opus"}
-MAX_UPLOAD_BYTES = 75 * 1024 * 1024   # 75 MB
+MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024   # 2 GB
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
@@ -218,9 +219,62 @@ def job_video(job_id: str):
         download_name=job.get("display_name", "visualization.mp4"),
     )
 
+# I added /mux-video here, i dont know if order has importance
+@app.route('/mux-video', methods=['POST'])
+def mux_video():
+    if 'video' not in request.files or 'audio' not in request.files:
+        return {'error': 'Missing video or audio'}, 400
 
+    video_file = request.files['video']
+    audio_file = request.files['audio']
 
+    # Determine input extension so ffmpeg recognises the container
+    video_ext = os.path.splitext(video_file.filename or 'input.mp4')[1] or '.mp4'
 
+    video_tmp = tempfile.NamedTemporaryFile(suffix=video_ext, delete=False)
+    audio_tmp = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
+    output_tmp = tempfile.NamedTemporaryFile(suffix='.mp4', delete=False)
+
+    try:
+        video_file.save(video_tmp.name)   # Werkzeug already streams to disk for large files
+        audio_file.save(audio_tmp.name)   # when using save() directly — this is fine
+        video_tmp.close()
+        audio_tmp.close()
+        output_tmp.close()
+
+        result = subprocess.run([
+            'ffmpeg', '-y',
+            '-i', video_tmp.name,
+            '-i', audio_tmp.name,
+            '-map', '0:v:0',
+            '-map', '1:a:0',
+            '-c:v', 'copy',       # copy video stream, no re-encode
+            '-c:a', 'aac',
+            '-b:a', '192k',
+            '-shortest',
+            output_tmp.name,
+        ], capture_output=True, text=True, timeout=300)
+
+        if result.returncode != 0:
+            app.logger.error('ffmpeg error: %s', result.stderr)
+            return {'error': 'ffmpeg failed', 'detail': result.stderr[-500:]}, 500
+
+        return send_file(
+            output_tmp.name,
+            mimetype='video/mp4',
+            as_attachment=True,
+            download_name='video-to-sound.mp4',
+        )
+    except subprocess.TimeoutExpired:
+        return {'error': 'Processing timed out'}, 504
+    finally:
+        for f in [video_tmp.name, audio_tmp.name]:
+            try: os.unlink(f)
+            except: pass
+        # Output file is deleted after send_file streams it
+        # (Flask reads the whole file before returning, so this is safe)
+        try: os.unlink(output_tmp.name)
+        except: pass
 
 # Path to the built React app. Set by Docker; for local dev pointing at
 # the sibling visual-song-react/dist folder.
@@ -232,6 +286,9 @@ REACT_BUILD_DIR = os.environ.get(
 @app.route("/")
 @app.route("/<path:path>")
 def serve_react(path: str = ""):
+    # Don't let the catch-all swallow API routes
+    if path.startswith(('jobs', 'mux-video', 'api')):
+        abort(404)
     """Serve the React SPA. Static files like /assets/foo.js get served
     directly; everything else returns index.html so React Router can
     handle client-side routing.
@@ -254,6 +311,7 @@ def sitemap():
   <url><loc>https://visualsongproject.com/notes</loc></url>
   <url><loc>https://visualsongproject.com/song</loc></url>
   <url><loc>https://visualsongproject.com/camera</loc></url>
+  <url><loc>https://visualsongproject.com/video</loc></url>
   <url><loc>https://visualsongproject.com/about</loc></url>
 </urlset>"""
     return Response(xml, mimetype='application/xml')
