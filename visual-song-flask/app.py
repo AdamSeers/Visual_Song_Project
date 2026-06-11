@@ -11,7 +11,7 @@ import atexit
 import subprocess
 import shutil
 
-from flask import Flask, jsonify, render_template, request, send_from_directory
+from flask import Flask, jsonify, render_template, request, send_from_directory, Response
 from werkzeug.utils import secure_filename
 
 from visualizer.pipeline import process_audio_to_video
@@ -244,6 +244,27 @@ def serve_react(path: str = ""):
     return send_from_directory(REACT_BUILD_DIR, "index.html")
 
 
+@app.route('/sitemap.xml')
+def sitemap():
+    xml = """<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/0.9">
+  <url><loc>https://visualsongproject.com/</loc></url>
+  <url><loc>https://visualsongproject.com/images</loc></url>
+  <url><loc>https://visualsongproject.com/live</loc></url>
+  <url><loc>https://visualsongproject.com/notes</loc></url>
+  <url><loc>https://visualsongproject.com/song</loc></url>
+  <url><loc>https://visualsongproject.com/camera</loc></url>
+  <url><loc>https://visualsongproject.com/about</loc></url>
+</urlset>"""
+    return Response(xml, mimetype='application/xml')
+
+
+@app.route('/robots.txt')
+def robots():
+    content = """User-agent: *
+Disallow:
+Sitemap: https://visualsongproject.com/sitemap.xml"""
+    return Response(content, mimetype='text/plain')
 
 
 if __name__ == "__main__":
