@@ -11,6 +11,21 @@ export interface ColorBucket {
     whiteness: number
 }
 
+// A reusable buffer of white noise. Generated once per AudioContext and
+// shared by all voices via looping BufferSource nodes.
+const _noiseBufferCache = new WeakMap<BaseAudioContext, AudioBuffer>()
+
+export function getNoiseBuffer(ctx: BaseAudioContext): AudioBuffer {
+    const cached = _noiseBufferCache.get(ctx)
+    if (cached) return cached
+    const seconds = 2
+    const buf = ctx.createBuffer(1, ctx.sampleRate * seconds, ctx.sampleRate)
+    const data = buf.getChannelData(0)
+    for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1
+    _noiseBufferCache.set(ctx, buf)
+    return buf
+}
+
 export function rgbToBaseFreq(r: number, g: number, b: number): number {
     const max = Math.max(r, g, b)
     const min = Math.min(r, g, b)
@@ -86,57 +101,57 @@ export function startChord(
     const totalWeight = weighted.reduce((s, b) => s + b.weight, 0)
     const transposeFactor = Math.pow(2, transposeSemitones / 12)
 
-    const oscillators: { osc: OscillatorNode; gain: GainNode }[] = []
+    const stopFns: (() => void)[] = []
 
     for (const bucket of weighted) {
-        if (bucket.weight <= 0) continue   // pure black, etc. — contributes nothing
+        if (bucket.weight <= 0) continue
         const baseFreq = rgbToBaseFreq(bucket.r, bucket.g, bucket.b)
         const freq = baseFreq * transposeFactor
         if (freq < 20 || freq > ctx.sampleRate / 2) continue
 
         const amp = (bucket.weight / totalWeight) * 0.8
-        // As whiteness rises, the fundamental fades and many detuned partials
-        // take over — turning a defined pitch into a band of frequencies that
-        // sounds like noise rather than a recognizable note.
-        const whiteness = bucket.whiteness
-        const purity = 1 - whiteness          // 1 = pure tone, 0 = pure white = full noise
+        // purity 1 = clean sine (vivid color), 0 = pure noise (white color)
+        const purity = 1 - bucket.whiteness
 
-        const harmonics: { ratio: number; amp: number }[] = []
+        // ── Tonal part: sine, loud when pure ──
+        const osc = ctx.createOscillator()
+        osc.type = 'sine'
+        osc.frequency.value = freq
+        const oscGain = ctx.createGain()
+        oscGain.gain.value = amp * purity
+        osc.connect(oscGain)
+        oscGain.connect(master)
+        osc.start()
 
-        // Fundamental: strong when pure, weak when white
-        harmonics.push({ ratio: 1, amp: purity })
-
-        // Add a few harmonics that grow with whiteness — gives "less pure" feel
-        if (whiteness > 0.1) {
-            harmonics.push({ ratio: 2, amp: 0.3 * whiteness })
-            harmonics.push({ ratio: 3, amp: 0.2 * whiteness })
+        // ── Noise part: band-pass filtered white noise, loud when white ──
+        // A bandpass centered on the voice frequency keeps the noise tied to
+        // the color's "pitch region" while still reading as noise/hiss.
+        const noiseSrc = ctx.createBufferSource()
+        noiseSrc.buffer = getNoiseBuffer(ctx)
+        noiseSrc.loop = true
+        const bandpass = ctx.createBiquadFilter()
+        // As whiteness rises, switch from a tight bandpass (tonal) toward a
+        // lowpass with a high cutoff (broadband hiss, no center pitch).
+        if (bucket.whiteness > 0.7) {
+            bandpass.type = 'lowpass'
+            bandpass.frequency.value = 8000   // broad hiss, no pitched center
+            bandpass.Q.value = 0.0001
+        } else {
+            bandpass.type = 'bandpass'
+            bandpass.frequency.value = Math.min(freq, ctx.sampleRate / 2 - 100)
+            bandpass.Q.value = Math.max(0.15, 1.2 - bucket.whiteness * 1.5)
         }
+        const noiseGain = ctx.createGain()
+        noiseGain.gain.value = amp * bucket.whiteness * 0.3   // noise scaled up to be audible
+        noiseSrc.connect(bandpass)
+        bandpass.connect(noiseGain)
+        noiseGain.connect(master)
+        noiseSrc.start()
 
-        // For VERY white colors, scatter additional detuned partials across
-        // a wider range so the result reads as noise, not a chord tone.
-        if (whiteness > 0.5) {
-            const noiseStrength = (whiteness - 0.5) * 2   // 0 at w=0.5, 1 at w=1
-            // Inharmonic ratios (not integer multiples) — these don't fuse with
-            // the fundamental, so the ear perceives them as noise/texture.
-            const inharmonicRatios = [1.41, 1.73, 2.24, 2.83, 3.46, 4.12]
-            for (const r of inharmonicRatios) {
-                harmonics.push({ ratio: r, amp: 0.12 * noiseStrength })
-            }
-        }
-
-        for (const harm of harmonics) {
-            const partialFreq = freq * harm.ratio
-            if (partialFreq > ctx.sampleRate / 2) continue
-            const osc = ctx.createOscillator()
-            osc.type = 'sine'
-            osc.frequency.value = partialFreq
-            const gain = ctx.createGain()
-            gain.gain.value = amp * harm.amp
-            osc.connect(gain)
-            gain.connect(master)
-            osc.start()
-            oscillators.push({ osc, gain })
-        }
+        stopFns.push(() => {
+            try { osc.stop(ctx.currentTime + 0.35) } catch { }
+            try { noiseSrc.stop(ctx.currentTime + 0.35) } catch { }
+        })
     }
 
     return () => {
@@ -144,9 +159,7 @@ export function startChord(
         master.gain.cancelScheduledValues(now)
         master.gain.setValueAtTime(master.gain.value, now)
         master.gain.linearRampToValueAtTime(0, now + 0.3)
-        for (const { osc } of oscillators) {
-            try { osc.stop(now + 0.35) } catch { }
-        }
+        for (const stop of stopFns) stop()
     }
 }
 
@@ -313,58 +326,51 @@ function schedulePanelChord(
     master.gain.linearRampToValueAtTime(0, endTime)
     master.connect(ctx.destination)
 
-    const weighted = panel.colors
-        .map(b => ({ ...b, weight: bucketWeight(b) }))
+    const weighted = panel.colors.map(b => ({ ...b, weight: bucketWeight(b) }))
     const totalWeight = weighted.reduce((s, b) => s + b.weight, 0) || 1
 
     for (const bucket of weighted) {
         if (bucket.weight <= 0) continue
-        const baseFreq = rgbToBaseFreq(bucket.r, bucket.g, bucket.b)
-        if (baseFreq < 20 || baseFreq > ctx.sampleRate / 2) continue
+        const freq = rgbToBaseFreq(bucket.r, bucket.g, bucket.b)
+        if (freq < 20 || freq > ctx.sampleRate / 2) continue
 
         const amp = (bucket.weight / totalWeight) * 0.8
-        // As whiteness rises, the fundamental fades and many detuned partials
-        // take over — turning a defined pitch into a band of frequencies that
-        // sounds like noise rather than a recognizable note.
-        const whiteness = bucket.whiteness
-        const purity = 1 - whiteness          // 1 = pure tone, 0 = pure white = full noise
+        const purity = 1 - bucket.whiteness
 
-        const harmonics: { ratio: number; amp: number }[] = []
+        // Tonal sine
+        const osc = ctx.createOscillator()
+        osc.type = 'sine'
+        osc.frequency.value = freq
+        const oscGain = ctx.createGain()
+        oscGain.gain.value = amp * purity
+        osc.connect(oscGain)
+        oscGain.connect(master)
+        osc.start(startTime)
+        osc.stop(endTime)
 
-        // Fundamental: strong when pure, weak when white
-        harmonics.push({ ratio: 1, amp: purity })
-
-        // Add a few harmonics that grow with whiteness — gives "less pure" feel
-        if (whiteness > 0.1) {
-            harmonics.push({ ratio: 2, amp: 0.3 * whiteness })
-            harmonics.push({ ratio: 3, amp: 0.2 * whiteness })
+        // Filtered noise
+        const noiseSrc = ctx.createBufferSource()
+        noiseSrc.buffer = getNoiseBuffer(ctx)
+        noiseSrc.loop = true
+        const bandpass = ctx.createBiquadFilter()
+        // As whiteness rises, switch from a tight bandpass (tonal) toward a
+        // lowpass with a high cutoff (broadband hiss, no center pitch).
+        if (bucket.whiteness > 0.7) {
+            bandpass.type = 'lowpass'
+            bandpass.frequency.value = 8000   // broad hiss, no pitched center
+            bandpass.Q.value = 0.0001
+        } else {
+            bandpass.type = 'bandpass'
+            bandpass.frequency.value = Math.min(freq, ctx.sampleRate / 2 - 100)
+            bandpass.Q.value = Math.max(0.15, 1.2 - bucket.whiteness * 1.5)
         }
-
-        // For VERY white colors, scatter additional detuned partials across
-        // a wider range so the result reads as noise, not a chord tone.
-        if (whiteness > 0.5) {
-            const noiseStrength = (whiteness - 0.5) * 2   // 0 at w=0.5, 1 at w=1
-            // Inharmonic ratios (not integer multiples) — these don't fuse with
-            // the fundamental, so the ear perceives them as noise/texture.
-            const inharmonicRatios = [1.41, 1.73, 2.24, 2.83, 3.46, 4.12]
-            for (const r of inharmonicRatios) {
-                harmonics.push({ ratio: r, amp: 0.12 * noiseStrength })
-            }
-        }
-
-        for (const harm of harmonics) {
-            const partialFreq = baseFreq * harm.ratio
-            if (partialFreq > ctx.sampleRate / 2) continue
-            const osc = ctx.createOscillator()
-            osc.type = 'sine'
-            osc.frequency.value = partialFreq
-            const gain = ctx.createGain()
-            gain.gain.value = amp * harm.amp
-            osc.connect(gain)
-            gain.connect(master)
-            osc.start(startTime)
-            osc.stop(endTime)
-        }
+        const noiseGain = ctx.createGain()
+        noiseGain.gain.value = amp * bucket.whiteness * 0.3
+        noiseSrc.connect(bandpass)
+        bandpass.connect(noiseGain)
+        noiseGain.connect(master)
+        noiseSrc.start(startTime)
+        noiseSrc.stop(endTime)
     }
 }
 

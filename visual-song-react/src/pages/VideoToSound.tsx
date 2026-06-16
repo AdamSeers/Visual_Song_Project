@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { bucketWeight, rgbToBaseFreq } from '../audio/colorChord'
+import { bucketWeight, rgbToBaseFreq, getNoiseBuffer } from '../audio/colorChord'
 
 const POOL_SIZE = 16
 const BUCKET_STEP = 30
@@ -13,10 +13,10 @@ interface TimelineFrame { time: number; buckets: DetectedBucket[] }
 
 interface OfflineVoice {
     osc: OscillatorNode; gain: GainNode
-    harmOsc: OscillatorNode; harmGain: GainNode
+    noiseSrc: AudioBufferSourceNode; bandpass: BiquadFilterNode; noiseGain: GainNode
     targetFreq: number
     lastFreq: number; lastGain: number
-    lastHarmFreq: number; lastHarmGain: number
+    lastNoiseFreq: number; lastNoiseGain: number
 }
 
 function applySaturation(r: number, g: number, b: number, sat: number): [number, number, number] {
@@ -70,17 +70,28 @@ function seekTo(video: HTMLVideoElement, t: number): Promise<void> {
 function createOfflineVoicePool(ctx: OfflineAudioContext, master: GainNode): OfflineVoice[] {
     return Array.from({ length: POOL_SIZE }, (_, i) => {
         const osc = ctx.createOscillator(), gain = ctx.createGain()
-        const harmOsc = ctx.createOscillator(), harmGain = ctx.createGain()
-        osc.type = 'sine'; harmOsc.type = 'sine'
+        osc.type = 'sine'
         const f = 150 + i * 45
-        osc.frequency.setValueAtTime(f, 0); harmOsc.frequency.setValueAtTime(f * 2, 0)
-        gain.gain.setValueAtTime(0, 0); harmGain.gain.setValueAtTime(0, 0)
+        osc.frequency.setValueAtTime(f, 0)
+        gain.gain.setValueAtTime(0, 0)
         osc.connect(gain); gain.connect(master)
-        harmOsc.connect(harmGain); harmGain.connect(master)
-        osc.start(0); harmOsc.start(0)
+        osc.start(0)
+
+        const noiseSrc = ctx.createBufferSource()
+        noiseSrc.buffer = getNoiseBuffer(ctx)
+        noiseSrc.loop = true
+        const bandpass = ctx.createBiquadFilter()
+        bandpass.type = 'bandpass'
+        bandpass.frequency.setValueAtTime(f, 0)
+        bandpass.Q.setValueAtTime(1, 0)
+        const noiseGain = ctx.createGain()
+        noiseGain.gain.setValueAtTime(0, 0)
+        noiseSrc.connect(bandpass); bandpass.connect(noiseGain); noiseGain.connect(master)
+        noiseSrc.start(0)
+
         return {
-            osc, gain, harmOsc, harmGain, targetFreq: f,
-            lastFreq: f, lastGain: 0, lastHarmFreq: f * 2, lastHarmGain: 0
+            osc, gain, noiseSrc, bandpass, noiseGain, targetFreq: f,
+            lastFreq: f, lastGain: 0, lastNoiseFreq: f, lastNoiseGain: 0,
         }
     })
 }
@@ -105,17 +116,25 @@ function scheduleVoiceUpdate(
         if (bestIdx < 0) break
         const v = voices[bestIdx]
         const amp = (color.weight / totalWeight) * 0.8
-        const harmAmp = amp * Math.max(0, color.whiteness - 0.1) * 0.5
+        const purity = 1 - color.whiteness
+        const noiseAmp = amp * color.whiteness * 0.3
+
         v.osc.frequency.setValueAtTime(v.lastFreq, atTime)
         v.gain.gain.setValueAtTime(v.lastGain, atTime)
         v.osc.frequency.setTargetAtTime(color.freq, atTime, TC)
-        v.gain.gain.setTargetAtTime(amp, atTime, TC)
-        v.harmOsc.frequency.setValueAtTime(v.lastHarmFreq, atTime)
-        v.harmGain.gain.setValueAtTime(v.lastHarmGain, atTime)
-        v.harmOsc.frequency.setTargetAtTime(color.freq * 2, atTime, TC)
-        v.harmGain.gain.setTargetAtTime(harmAmp, atTime, TC)
-        v.lastFreq = color.freq; v.lastGain = amp
-        v.lastHarmFreq = color.freq * 2; v.lastHarmGain = harmAmp
+        v.gain.gain.setTargetAtTime(amp * purity, atTime, TC)
+
+        v.bandpass.frequency.setValueAtTime(v.lastNoiseFreq, atTime)
+        v.noiseGain.gain.setValueAtTime(v.lastNoiseGain, atTime)
+        const w = color.whiteness
+        const bpCenter = color.freq * (1 - w) + 4000 * w
+        const bpQ = Math.max(0.05, 1.2 - w * 1.6)
+        v.bandpass.frequency.setTargetAtTime(bpCenter, atTime, TC)
+        v.bandpass.Q.setTargetAtTime(bpQ, atTime, TC)
+        v.noiseGain.gain.setTargetAtTime(noiseAmp, atTime, TC)
+
+        v.lastFreq = color.freq; v.lastGain = amp * purity
+        v.lastNoiseFreq = bpCenter; v.lastNoiseGain = noiseAmp
         v.targetFreq = color.freq; used[bestIdx] = true
     }
     for (let i = 0; i < voices.length; i++) {
@@ -123,9 +142,9 @@ function scheduleVoiceUpdate(
             const v = voices[i]
             v.gain.gain.setValueAtTime(v.lastGain, atTime)
             v.gain.gain.setTargetAtTime(0, atTime, TC)
-            v.harmGain.gain.setValueAtTime(v.lastHarmGain, atTime)
-            v.harmGain.gain.setTargetAtTime(0, atTime, TC)
-            v.lastGain = 0; v.lastHarmGain = 0
+            v.noiseGain.gain.setValueAtTime(v.lastNoiseGain, atTime)
+            v.noiseGain.gain.setTargetAtTime(0, atTime, TC)
+            v.lastGain = 0; v.lastNoiseGain = 0
         }
     }
 }
@@ -147,9 +166,9 @@ async function renderAudioTimeline(
     for (const v of voices) {
         v.gain.gain.setValueAtTime(v.lastGain, Math.max(0, end - 0.1))
         v.gain.gain.linearRampToValueAtTime(0, end)
-        v.harmGain.gain.setValueAtTime(v.lastHarmGain, Math.max(0, end - 0.1))
-        v.harmGain.gain.linearRampToValueAtTime(0, end)
-        v.osc.stop(end); v.harmOsc.stop(end)
+        v.noiseGain.gain.setValueAtTime(v.lastNoiseGain, Math.max(0, end - 0.1))
+        v.noiseGain.gain.linearRampToValueAtTime(0, end)
+        v.osc.stop(end); v.noiseSrc.stop(end)
     }
     return await offline.startRendering()
 }

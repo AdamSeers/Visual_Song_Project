@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { bucketWeight, rgbToBaseFreq } from '../audio/colorChord'
+import { bucketWeight, rgbToBaseFreq, getNoiseBuffer } from '../audio/colorChord'
 
 // ── Constants ─────────────────────────────────────────────────────────────
 const POOL_SIZE = 16
@@ -9,8 +9,9 @@ const BUCKET_STEP = 30
 interface Voice {
     osc: OscillatorNode
     gain: GainNode
-    harmOsc: OscillatorNode
-    harmGain: GainNode
+    noiseSrc: AudioBufferSourceNode
+    bandpass: BiquadFilterNode
+    noiseGain: GainNode
     targetFreq: number
 }
 
@@ -89,27 +90,30 @@ function createVoicePool(ctx: AudioContext, master: GainNode): Voice[] {
     return Array.from({ length: POOL_SIZE }, (_, i) => {
         const osc = ctx.createOscillator()
         const gain = ctx.createGain()
-        const harmOsc = ctx.createOscillator()
-        const harmGain = ctx.createGain()
-
         osc.type = 'sine'
-        harmOsc.type = 'sine'
-
         const initFreq = 150 + i * 45
         osc.frequency.setValueAtTime(initFreq, ctx.currentTime)
-        harmOsc.frequency.setValueAtTime(initFreq * 2, ctx.currentTime)
         gain.gain.setValueAtTime(0, ctx.currentTime)
-        harmGain.gain.setValueAtTime(0, ctx.currentTime)
-
         osc.connect(gain)
         gain.connect(master)
-        harmOsc.connect(harmGain)
-        harmGain.connect(master)
-
         osc.start()
-        harmOsc.start()
 
-        return { osc, gain, harmOsc, harmGain, targetFreq: initFreq }
+        // Persistent noise voice (band-pass filtered)
+        const noiseSrc = ctx.createBufferSource()
+        noiseSrc.buffer = getNoiseBuffer(ctx)
+        noiseSrc.loop = true
+        const bandpass = ctx.createBiquadFilter()
+        bandpass.type = 'bandpass'
+        bandpass.frequency.setValueAtTime(initFreq, ctx.currentTime)
+        bandpass.Q.setValueAtTime(1, ctx.currentTime)
+        const noiseGain = ctx.createGain()
+        noiseGain.gain.setValueAtTime(0, ctx.currentTime)
+        noiseSrc.connect(bandpass)
+        bandpass.connect(noiseGain)
+        noiseGain.connect(master)
+        noiseSrc.start()
+
+        return { osc, gain, noiseSrc, bandpass, noiseGain, targetFreq: initFreq }
     })
 }
 
@@ -145,27 +149,40 @@ function updateVoices(
         const voice = voices[bestIdx]
         const amp = (color.weight / totalWeight) * 0.8
 
-        // Fundamental
-        const currentFreq = voice.osc.frequency.value
-        const currentGain = voice.gain.gain.value
+        // Saturation decides tone-vs-noise: grey (low saturation) = noise at
+        // any brightness; vivid color (high saturation) = clean tone.
+        const sat = color.saturation
+        const purity = sat
+        const noiseLevel = 1 - sat
+
+        // Tonal sine — loud only when saturated
+        const curFreq = voice.osc.frequency.value
+        const curGain = voice.gain.gain.value
         voice.osc.frequency.cancelScheduledValues(now)
         voice.gain.gain.cancelScheduledValues(now)
-        voice.osc.frequency.setValueAtTime(currentFreq, now)
-        voice.gain.gain.setValueAtTime(currentGain, now)
+        voice.osc.frequency.setValueAtTime(curFreq, now)
+        voice.gain.gain.setValueAtTime(curGain, now)
         voice.osc.frequency.setTargetAtTime(color.freq, now, TC)
-        voice.gain.gain.setTargetAtTime(amp, now, TC)
+        voice.gain.gain.setTargetAtTime(amp * purity, now, TC)
 
-        // 2nd harmonic — grows with whiteness (lighter = less pure)
-        const harmFreq = color.freq * 2
-        const harmAmp = amp * Math.max(0, color.whiteness - 0.1) * 0.5
-        const currentHarmFreq = voice.harmOsc.frequency.value
-        const currentHarmGain = voice.harmGain.gain.value
-        voice.harmOsc.frequency.cancelScheduledValues(now)
-        voice.harmGain.gain.cancelScheduledValues(now)
-        voice.harmOsc.frequency.setValueAtTime(currentHarmFreq, now)
-        voice.harmGain.gain.setValueAtTime(currentHarmGain, now)
-        voice.harmOsc.frequency.setTargetAtTime(harmFreq, now, TC)
-        voice.harmGain.gain.setTargetAtTime(harmAmp, now, TC)
+        // Noise band — loud when desaturated (grey/white)
+        const noiseAmp = amp * noiseLevel * 0.3
+        const curBp = voice.bandpass.frequency.value
+        const curNg = voice.noiseGain.gain.value
+        voice.bandpass.frequency.cancelScheduledValues(now)
+        voice.noiseGain.gain.cancelScheduledValues(now)
+        voice.bandpass.frequency.setValueAtTime(curBp, now)
+        voice.noiseGain.gain.setValueAtTime(curNg, now)
+
+        // Pure noise sits in a comfortable mid band; saturated colors track pitch
+        const NOISE_CENTER = 700
+        const rawCenter = color.freq * sat + NOISE_CENTER * (1 - sat)
+        const bpCenter = Math.min(2000, Math.max(300, rawCenter))
+        const bpQ = Math.max(0.4, 0.4 + sat)
+        voice.bandpass.frequency.setTargetAtTime(bpCenter, now, TC)
+        voice.bandpass.Q.setTargetAtTime(bpQ, now, TC)
+
+        voice.noiseGain.gain.setTargetAtTime(noiseAmp, now, TC)
 
         voice.targetFreq = color.freq
         voiceUsed[bestIdx] = true
@@ -174,14 +191,15 @@ function updateVoices(
     // Fade out unused voices
     for (let i = 0; i < voices.length; i++) {
         if (!voiceUsed[i]) {
-            const cg = voices[i].gain.gain.value
-            const chg = voices[i].harmGain.gain.value
-            voices[i].gain.gain.cancelScheduledValues(now)
-            voices[i].gain.gain.setValueAtTime(cg, now)
-            voices[i].gain.gain.setTargetAtTime(0, now, TC)
-            voices[i].harmGain.gain.cancelScheduledValues(now)
-            voices[i].harmGain.gain.setValueAtTime(chg, now)
-            voices[i].harmGain.gain.setTargetAtTime(0, now, TC)
+            const v = voices[i]
+            const cg = v.gain.gain.value
+            const cng = v.noiseGain.gain.value
+            v.gain.gain.cancelScheduledValues(now)
+            v.gain.gain.setValueAtTime(cg, now)
+            v.gain.gain.setTargetAtTime(0, now, TC)
+            v.noiseGain.gain.cancelScheduledValues(now)
+            v.noiseGain.gain.setValueAtTime(cng, now)
+            v.noiseGain.gain.setTargetAtTime(0, now, TC)
         }
     }
 }
@@ -288,13 +306,13 @@ export default function Camera() {
             const now = audioCtxRef.current.currentTime
             for (const voice of voicePoolRef.current) {
                 const cg = voice.gain.gain.value
-                const chg = voice.harmGain.gain.value
+                const cng = voice.noiseGain.gain.value
                 voice.gain.gain.cancelScheduledValues(now)
                 voice.gain.gain.setValueAtTime(cg, now)
                 voice.gain.gain.setTargetAtTime(0, now, 0.2)
-                voice.harmGain.gain.cancelScheduledValues(now)
-                voice.harmGain.gain.setValueAtTime(chg, now)
-                voice.harmGain.gain.setTargetAtTime(0, now, 0.2)
+                voice.noiseGain.gain.cancelScheduledValues(now)
+                voice.noiseGain.gain.setValueAtTime(cng, now)
+                voice.noiseGain.gain.setTargetAtTime(0, now, 0.2)
             }
         }
 
