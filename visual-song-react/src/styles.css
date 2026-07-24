@@ -1775,3 +1775,51 @@ h1 .w2 {
     margin-left: 100%;
   }
 }
+
+.input-mode-toggle {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.mode-btn {
+  flex: 1;
+  background: var(--bg-3);
+  border: 1px solid var(--rule);
+  color: var(--ink-dim);
+  padding: 0.6rem 1rem;
+  border-radius: 2px;
+  cursor: pointer;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+
+.mode-btn:hover {
+  color: var(--ink);
+  border-color: var(--ink-faint);
+}
+
+.mode-btn.active {
+  color: var(--bg);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.youtube-input {
+  width: 100%;
+  background: var(--bg-2);
+  color: var(--ink);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  padding: 0.75rem 1rem;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.9rem;
+}
+
+.youtube-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}

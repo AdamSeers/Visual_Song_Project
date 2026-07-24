@@ -12,6 +12,12 @@ import subprocess
 import tempfile
 import shutil
 
+import re
+import requests
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from flask import Flask, jsonify, render_template, request, send_from_directory, Response, send_file, abort
 from werkzeug.utils import secure_filename
 
@@ -25,6 +31,10 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 ALLOWED_EXTENSIONS = {"mp3", "wav", "flac", "ogg", "m4a", "aac", "opus"}
 MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024   # 2 GB
+
+# Simple in-memory cache so the same video is never quota-checked twice.
+_license_cache: Dict[str, bool] = {}
+_license_cache_lock = threading.Lock()
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
@@ -60,6 +70,126 @@ def _get_int(name: str, default: int, lo: int, hi: int) -> int:
     except (TypeError, ValueError):
         v = default
     return max(lo, min(hi, v))
+
+def _extract_video_id(url: str) -> str | None:
+    """Extract an 11-character YouTube video ID from common URL formats."""
+    pattern = r'(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/shorts\/)([A-Za-z0-9_-]{11})'
+    m = re.search(pattern, url)
+    return m.group(1) if m else None
+
+
+def _check_creative_commons(video_id: str) -> bool:
+    """True if the video's license is Creative Commons. Costs 1 quota unit
+    on first check per video; cached afterward."""
+    with _license_cache_lock:
+        if video_id in _license_cache:
+            return _license_cache[video_id]
+
+    api_key = os.environ.get("YOUTUBE_API_KEY")
+    if not api_key:
+        raise RuntimeError("YOUTUBE_API_KEY is not configured on the server")
+
+    resp = requests.get(
+        "https://www.googleapis.com/youtube/v3/videos",
+        params={"part": "status", "id": video_id, "key": api_key},
+        timeout=10,
+    )
+    resp.raise_for_status()
+    items = resp.json().get("items", [])
+    if not items:
+        raise ValueError("Video not found or unavailable")
+
+    is_cc = items[0]["status"].get("license") == "creativeCommon"
+    with _license_cache_lock:
+        _license_cache[video_id] = is_cc
+    return is_cc
+
+
+def _download_youtube_audio(video_id: str, job_id: str) -> tuple[str, str]:
+    """Download and extract audio from a YouTube video. Returns (path, title)."""
+    import yt_dlp
+
+    out_template = os.path.join(UPLOAD_DIR, f"{job_id}_yt.%(ext)s")
+    ydl_opts = {
+        "format": "bestaudio/best",
+        "outtmpl": out_template,
+        "postprocessors": [{
+            "key": "FFmpegExtractAudio",
+            "preferredcodec": "mp3",
+            "preferredquality": "192",
+        }],
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "max_filesize": 200 * 1024 * 1024,
+    }
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+        title = info.get("title", "youtube_audio")
+
+    final_path = os.path.join(UPLOAD_DIR, f"{job_id}_yt.mp3")
+    if not os.path.isfile(final_path):
+        raise RuntimeError("Audio extraction failed — output file not found")
+    return final_path, title
+
+
+def _submit_youtube_job(is_image_job: bool):
+    url = (request.form.get("youtube_url") or "").strip()
+    if not url:
+        return jsonify({"error": "No YouTube URL provided"}), 400
+
+    video_id = _extract_video_id(url)
+    if not video_id:
+        return jsonify({"error": "Could not read a video ID from that URL"}), 400
+
+    try:
+        is_cc = _check_creative_commons(video_id)
+    except Exception as exc:
+        return jsonify({"error": f"Could not verify video license: {exc}"}), 502
+
+    if not is_cc:
+        return jsonify({
+            "error": "This video isn't Creative Commons licensed. "
+                     "Try uploading your own audio file instead."
+        }), 403
+
+    job_id = uuid.uuid4().hex
+    try:
+        in_path, title = _download_youtube_audio(video_id, job_id)
+    except Exception as exc:
+        return jsonify({"error": f"Could not download audio: {exc}"}), 502
+
+    safe_title = secure_filename(title) or "youtube_audio"
+    out_path = os.path.join(OUTPUT_DIR, f"{job_id}.mp4")
+
+    if is_image_job:
+        display_name = safe_title + "_images.mp4"
+        settings = {
+            "images_per_beat": _get_float("images_per_beat", 2.0, 0.1, 16.0),
+            "accuracy": _get_float("accuracy", 0.9, 0.1, 1.0),
+            "audio_offset": _get_float("audio_offset", 0.0, 0.0, 1.0),
+            "debug_no_images": request.form.get("debug_no_images") == "on",
+        }
+        runner = _run_image_job
+    else:
+        display_name = safe_title + "_visual.mp4"
+        settings = {
+            "amplitude_floor": _get_float("amplitude_floor", 0.20, 0.0, 1.0),
+            "min_observed_frames": _get_int("min_observed_frames", 7, 1, 60),
+            "freq_smooth": _get_float("freq_smooth", 0.18, 0.01, 1.0),
+            "fade_in_frames": _get_int("fade_in_frames", 3, 1, 30),
+            "fade_out_frames": _get_int("fade_out_frames", 8, 1, 60),
+            "audio_offset": _get_float("audio_offset", 0.2, 0.0, 1.0),
+        }
+        runner = _run_job
+
+    with _jobs_lock:
+        _jobs[job_id] = {"status": "queued", "progress": 0.0, "submitted_at": time.time(), "settings": settings}
+
+    thread = threading.Thread(target=runner, args=(job_id, in_path, out_path, display_name, settings), daemon=True)
+    thread.start()
+    return jsonify({"job_id": job_id}), 202
 
 
 def _run_job(job_id: str, input_path: str, output_path: str, display_name: str, settings: dict) -> None:
@@ -218,6 +348,15 @@ def job_video(job_id: str):
         as_attachment=True,
         download_name=job.get("display_name", "visualization.mp4"),
     )
+
+@app.route("/jobs/youtube", methods=["POST"])
+def submit_youtube_job():
+    return _submit_youtube_job(is_image_job=False)
+
+
+@app.route("/jobs/images/youtube", methods=["POST"])
+def submit_youtube_image_job():
+    return _submit_youtube_job(is_image_job=True)
 
 # I added /mux-video here, i dont know if order has importance
 @app.route('/mux-video', methods=['POST'])

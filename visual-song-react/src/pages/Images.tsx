@@ -16,6 +16,8 @@ export default function Images() {
     const [progressDetail, setProgressDetail] = useState('analysing audio')
     const [resultUrl, setResultUrl] = useState<string | null>(null)
     const resultPanelRef = useRef<HTMLElement>(null)
+    const [inputMode, setInputMode] = useState<'file' | 'youtube'>('file')
+    const [youtubeUrl, setYoutubeUrl] = useState('')
 
     function pickFile(file: File) {
         setFileName(file.name)
@@ -37,18 +39,22 @@ export default function Images() {
 
     async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
         e.preventDefault()
-        if (!fileInputRef.current?.files?.[0]) return
+        if (inputMode === 'file' && !fileInputRef.current?.files?.[0]) return
+        if (inputMode === 'youtube' && !youtubeUrl.trim()) return
 
         setStatus('uploading')
-        setStatusTitle('uploading')
+        setStatusTitle(inputMode === 'youtube' ? 'checking license' : 'uploading')
         setProgressPct(0)
-        setProgressDetail('sending file to server')
+        setProgressDetail(inputMode === 'youtube' ? 'verifying Creative Commons license & fetching audio' : 'sending file to server')
         setResultUrl(null)
 
         const fd = new FormData(formRef.current!)
+        const endpoint = inputMode === 'youtube' ? '/jobs/images/youtube' : '/jobs/images'
+        if (inputMode === 'youtube') fd.append('youtube_url', youtubeUrl.trim())
+
         let jobId: string
         try {
-            const resp = await fetch('/jobs/images', { method: 'POST', body: fd })
+            const resp = await fetch(endpoint, { method: 'POST', body: fd })
             if (!resp.ok) {
                 const j = await resp.json().catch(() => ({}))
                 throw new Error(j.error || 'HTTP ' + resp.status)
@@ -57,14 +63,14 @@ export default function Images() {
             jobId = data.job_id
         } catch (err: any) {
             setStatus('error')
-            setStatusTitle('upload failed: ' + err.message)
+            setStatusTitle('failed: ' + err.message)
             setProgressDetail('\u00a0')
             return
         }
 
         setStatus('rendering')
         setStatusTitle('rendering')
-        setProgressDetail('detecting beats & matching images')
+        setProgressDetail('analysing pitches & rendering frames')
         poll(jobId)
     }
 
@@ -126,30 +132,62 @@ export default function Images() {
                 <h2 className="panel-title"><span className="num">01</span> drop in a file</h2>
 
                 <form id="upload-form" className="form" ref={formRef} onSubmit={handleSubmit}>
-                    <label
-                        className={'dropzone' + (dragOver ? ' drag' : '') + (hasFile ? ' has-file' : '')}
-                        onDragEnter={(e) => { e.preventDefault(); setDragOver(true) }}
-                        onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
-                        onDragLeave={(e) => { e.preventDefault(); setDragOver(false) }}
-                        onDrop={handleDrop}
-                    >
-                        <input
-                            type="file"
-                            name="audio"
-                            accept="audio/*"
-                            required
-                            hidden
-                            ref={fileInputRef}
-                            onChange={(e) => { const f = e.target.files?.[0]; if (f) pickFile(f) }}
-                        />
-                        <div className="dropzone-inner">
-                            <div className="dz-icon" aria-hidden="true">&#9834;</div>
-                            <div className="dz-text">
-                                <span className="dz-primary">{fileName}</span>
-                                <span className="dz-secondary">mp3 · wav · flac · ogg · m4a · aac · opus</span>
+                    <div className="input-mode-toggle">
+                        <button type="button"
+                            className={'mode-btn' + (inputMode === 'file' ? ' active' : '')}
+                            onClick={() => setInputMode('file')}>
+                            upload a file
+                        </button>
+                        <button type="button"
+                            className={'mode-btn' + (inputMode === 'youtube' ? ' active' : '')}
+                            onClick={() => setInputMode('youtube')}>
+                            YouTube link
+                        </button>
+                    </div>
+
+                    {inputMode === 'file' ? (
+                        <label
+                            className={'dropzone' + (dragOver ? ' drag' : '') + (hasFile ? ' has-file' : '')}
+                            onDragEnter={(e) => { e.preventDefault(); setDragOver(true) }}
+                            onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
+                            onDragLeave={(e) => { e.preventDefault(); setDragOver(false) }}
+                            onDrop={handleDrop}
+                        >
+                            <input
+                                type="file"
+                                name="audio"
+                                accept="audio/*"
+                                required
+                                hidden
+                                ref={fileInputRef}
+                                onChange={(e) => { const f = e.target.files?.[0]; if (f) pickFile(f) }}
+                            />
+                            <div className="dropzone-inner">
+                                <div className="dz-icon" aria-hidden="true">&#9834;</div>
+                                <div className="dz-text">
+                                    <span className="dz-primary">{fileName}</span>
+                                    <span className="dz-secondary">mp3 · wav · flac · ogg · m4a · aac · opus</span>
+                                </div>
                             </div>
+                        </label>
+                    ) : (
+                        <div className="control">
+                            <label htmlFor="youtube_url">
+                                <span className="control-name">YouTube URL</span>
+                                <span className="control-desc">
+                                    Only Creative Commons-licensed videos can be processed.
+                                </span>
+                            </label>
+                            <input
+                                type="url"
+                                id="youtube_url"
+                                placeholder="https://www.youtube.com/watch?v=..."
+                                value={youtubeUrl}
+                                onChange={e => setYoutubeUrl(e.target.value)}
+                                className="youtube-input"
+                            />
                         </div>
-                    </label>
+                    )}
 
                     <button type="submit" className="btn" disabled={submitting}>
                         <span>render images video</span>
