@@ -132,7 +132,7 @@ export default function Images() {
                 <h2 className="panel-title"><span className="num">01</span> drop in a file</h2>
 
                 <form id="upload-form" className="form" ref={formRef} onSubmit={handleSubmit}>
-                    <div className="input-mode-toggle">
+                    {/*<div className="input-mode-toggle">
                         <button type="button"
                             className={'mode-btn' + (inputMode === 'file' ? ' active' : '')}
                             onClick={() => setInputMode('file')}>
@@ -143,7 +143,7 @@ export default function Images() {
                             onClick={() => setInputMode('youtube')}>
                             YouTube link
                         </button>
-                    </div>
+                    </div>*/}
 
                     {inputMode === 'file' ? (
                         <label
